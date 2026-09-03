@@ -12,81 +12,81 @@ use crate::constants::{ConstantNames, FlagNames};
 use crate::endian::{BigEndian, Endian, U16, U32, U64};
 use crate::pod::Pod;
 
-/// Platform-specific constants for a Mach-O file.
+/// Platform-specific constant names for a Mach-O file.
 ///
-/// Returned by [`constants`] and [`machine_constants`].
+/// Returned by [`names`] and [`machine_names`].
 #[cfg(feature = "names")]
 #[derive(Debug)]
 #[non_exhaustive]
-pub struct Constants {
+pub struct Names {
     /// Values for `cpusubtype` fields.
     pub cpusubtype: &'static FlagNames<CpuSubtype>,
     /// Values for `r_type` field of `Rel*::r_info`.
-    pub reloc: &'static ConstantNames<u8>,
+    pub reloc: &'static ConstantNames<RelocationType>,
 }
 
-/// Return the platform independent constants.
+/// Return the platform independent names for constants.
 #[cfg(feature = "names")]
-pub const fn constants() -> &'static Constants {
-    Base::constants()
+pub const fn names() -> &'static Names {
+    Base::names()
 }
 
-/// Return the platform specific constants.
+/// Return the platform specific names for constants.
 ///
-/// Note that these also include the values returned by [`constants`].
+/// Note that these also include the values returned by [`names`].
 #[cfg(feature = "names")]
-pub const fn machine_constants(cputype: CpuType) -> &'static Constants {
+pub const fn machine_names(cputype: CpuType) -> &'static Names {
     match cputype {
-        CPU_TYPE_X86 => X86::constants(),
-        CPU_TYPE_X86_64 => X86_64::constants(),
-        CPU_TYPE_ARM => Arm::constants(),
-        CPU_TYPE_ARM64 => Arm64::constants(),
-        CPU_TYPE_ARM64_32 => Arm64_32::constants(),
-        CPU_TYPE_POWERPC | CPU_TYPE_POWERPC64 => Ppc::constants(),
-        _ => Base::constants(),
+        CPU_TYPE_X86 => X86::names(),
+        CPU_TYPE_X86_64 => X86_64::names(),
+        CPU_TYPE_ARM => Arm::names(),
+        CPU_TYPE_ARM64 => Arm64::names(),
+        CPU_TYPE_ARM64_32 => Arm64_32::names(),
+        CPU_TYPE_POWERPC | CPU_TYPE_POWERPC64 => Ppc::names(),
+        _ => Base::names(),
     }
 }
 
-constants! {
+names! {
     struct Base;
-    flags cpusubtype: CpuSubtype = NAMES_CPU_SUBTYPE;
-    consts reloc: u8 = {};
+    flags cpusubtype = NAMES_CPU_SUBTYPE;
+    consts reloc: RelocationType(u8) = {};
 }
 
-constants! {
+names! {
     struct X86(Base);
-    flags cpusubtype: CpuSubtype = NAMES_CPU_SUBTYPE_X86;
-    consts reloc: u8 = NAMES_GENERIC_RELOC;
+    flags cpusubtype = NAMES_CPU_SUBTYPE_X86;
+    consts reloc = NAMES_GENERIC_RELOC;
 }
 
-constants! {
+names! {
     struct X86_64(Base);
-    flags cpusubtype: CpuSubtype = NAMES_CPU_SUBTYPE_X86_64;
-    consts reloc: u8 = NAMES_X86_64_RELOC;
+    flags cpusubtype = NAMES_CPU_SUBTYPE_X86_64;
+    consts reloc = NAMES_X86_64_RELOC;
 }
 
-constants! {
+names! {
     struct Arm(Base);
-    flags cpusubtype: CpuSubtype = NAMES_CPU_SUBTYPE_ARM;
-    consts reloc: u8 = NAMES_ARM_RELOC;
+    flags cpusubtype = NAMES_CPU_SUBTYPE_ARM;
+    consts reloc = NAMES_ARM_RELOC;
 }
 
-constants! {
+names! {
     struct Arm64(Base);
-    flags cpusubtype: CpuSubtype = NAMES_CPU_SUBTYPE_ARM64;
-    consts reloc: u8 = NAMES_ARM64_RELOC;
+    flags cpusubtype = NAMES_CPU_SUBTYPE_ARM64;
+    consts reloc = NAMES_ARM64_RELOC;
 }
 
-constants! {
+names! {
     struct Arm64_32(Base);
-    flags cpusubtype: CpuSubtype = NAMES_CPU_SUBTYPE_ARM64_32;
-    consts reloc: u8 = NAMES_ARM64_RELOC;
+    flags cpusubtype = NAMES_CPU_SUBTYPE_ARM64_32;
+    consts reloc = NAMES_ARM64_RELOC;
 }
 
-constants! {
+names! {
     struct Ppc(Base);
-    flags cpusubtype: CpuSubtype = NAMES_CPU_SUBTYPE_POWERPC;
-    consts reloc: u8 = NAMES_PPC_RELOC;
+    flags cpusubtype = NAMES_CPU_SUBTYPE_POWERPC;
+    consts reloc = NAMES_PPC_RELOC;
 }
 
 // Definitions from "/usr/include/mach/machine.h".
@@ -166,6 +166,13 @@ impl From<CpuSubtypeId> for CpuSubtype {
 impl From<CpuSubtype> for CpuSubtypeId {
     fn from(value: CpuSubtype) -> Self {
         value.id()
+    }
+}
+
+impl core::ops::BitOr<CpuSubtype> for CpuSubtypeId {
+    type Output = CpuSubtype;
+    fn bitor(self, rhs: CpuSubtype) -> CpuSubtype {
+        rhs.with_id(self)
     }
 }
 
@@ -1590,8 +1597,8 @@ impl SectionFlags {
     }
 
     /// Set the section type field.
-    pub fn with_type(self, typ: SectionType) -> SectionFlags {
-        SectionFlags(self.0 & !SECTION_TYPE | u32::from(typ.0))
+    pub const fn with_type(self, typ: SectionType) -> SectionFlags {
+        SectionFlags(self.0 & !SECTION_TYPE | typ.0 as u32)
     }
 }
 
@@ -1599,6 +1606,13 @@ newtype!(
     /// Constants for the type of a section
     struct SectionType(u8);
 );
+
+impl SectionType {
+    /// Convert to a `SectionFlags` with no attributes, for use in const expressions.
+    pub const fn to_flags(self) -> SectionFlags {
+        SectionFlags(self.0 as u32)
+    }
+}
 
 impl From<SectionType> for SectionFlags {
     fn from(typ: SectionType) -> Self {
@@ -2902,55 +2916,124 @@ pub struct DyldInfoCommand<E: Endian> {
 /*
  * The following are used to encode rebasing information
  */
-pub const REBASE_TYPE_POINTER: u8 = 1;
-pub const REBASE_TYPE_TEXT_ABSOLUTE32: u8 = 2;
-pub const REBASE_TYPE_TEXT_PCREL32: u8 = 3;
+
+newtype!(
+    struct RebaseType(u8);
+);
+
+newtype_constant_names!(NAMES_REBASE_TYPE: RebaseType(u8) = {
+    REBASE_TYPE_POINTER = 1,
+    REBASE_TYPE_TEXT_ABSOLUTE32 = 2,
+    REBASE_TYPE_TEXT_PCREL32 = 3,
+});
+
+newtype!(
+    struct RebaseOpcode(u8);
+);
 
 pub const REBASE_OPCODE_MASK: u8 = 0xF0;
 pub const REBASE_IMMEDIATE_MASK: u8 = 0x0F;
-pub const REBASE_OPCODE_DONE: u8 = 0x00;
-pub const REBASE_OPCODE_SET_TYPE_IMM: u8 = 0x10;
-pub const REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB: u8 = 0x20;
-pub const REBASE_OPCODE_ADD_ADDR_ULEB: u8 = 0x30;
-pub const REBASE_OPCODE_ADD_ADDR_IMM_SCALED: u8 = 0x40;
-pub const REBASE_OPCODE_DO_REBASE_IMM_TIMES: u8 = 0x50;
-pub const REBASE_OPCODE_DO_REBASE_ULEB_TIMES: u8 = 0x60;
-pub const REBASE_OPCODE_DO_REBASE_ADD_ADDR_ULEB: u8 = 0x70;
-pub const REBASE_OPCODE_DO_REBASE_ULEB_TIMES_SKIPPING_ULEB: u8 = 0x80;
+
+newtype_constant_names!(NAMES_REBASE_OPCODE: RebaseOpcode(u8) = {
+    REBASE_OPCODE_DONE = 0x00,
+    REBASE_OPCODE_SET_TYPE_IMM = 0x10,
+    REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB = 0x20,
+    REBASE_OPCODE_ADD_ADDR_ULEB = 0x30,
+    REBASE_OPCODE_ADD_ADDR_IMM_SCALED = 0x40,
+    REBASE_OPCODE_DO_REBASE_IMM_TIMES = 0x50,
+    REBASE_OPCODE_DO_REBASE_ULEB_TIMES = 0x60,
+    REBASE_OPCODE_DO_REBASE_ADD_ADDR_ULEB = 0x70,
+    REBASE_OPCODE_DO_REBASE_ULEB_TIMES_SKIPPING_ULEB = 0x80,
+});
 
 /*
  * The following are used to encode binding information
  */
-pub const BIND_TYPE_POINTER: u8 = 1;
-pub const BIND_TYPE_TEXT_ABSOLUTE32: u8 = 2;
-pub const BIND_TYPE_TEXT_PCREL32: u8 = 3;
 
-pub const BIND_SPECIAL_DYLIB_SELF: i8 = 0;
-pub const BIND_SPECIAL_DYLIB_MAIN_EXECUTABLE: i8 = -1;
-pub const BIND_SPECIAL_DYLIB_FLAT_LOOKUP: i8 = -2;
-pub const BIND_SPECIAL_DYLIB_WEAK_LOOKUP: i8 = -3;
+newtype!(
+    struct BindType(u8);
+);
 
-pub const BIND_SYMBOL_FLAGS_WEAK_IMPORT: u8 = 0x1;
-pub const BIND_SYMBOL_FLAGS_NON_WEAK_DEFINITION: u8 = 0x8;
+newtype_constant_names!(NAMES_BIND_TYPE: BindType(u8) = {
+    BIND_TYPE_POINTER = 1,
+    BIND_TYPE_TEXT_ABSOLUTE32 = 2,
+    BIND_TYPE_TEXT_PCREL32 = 3,
+});
+
+newtype!(
+    /// The library ordinal for a bind.
+    ///
+    /// A positive value is the 1-based index of the dylib containing the symbol.
+    /// Zero and negative values are the special `BIND_SPECIAL_DYLIB_*` constants.
+    struct BindDylib(i32);
+);
+
+impl BindDylib {
+    /// Whether this is a reserved constant, rather than a library ordinal.
+    pub fn is_special(self) -> bool {
+        self.0 <= 0
+    }
+
+    /// Get the library ordinal.
+    ///
+    /// Returns `None` for reserved constants.
+    pub fn index(self) -> Option<u32> {
+        if self.0 <= 0 {
+            None
+        } else {
+            Some(self.0 as u32)
+        }
+    }
+}
+
+newtype_constant_names!(NAMES_BIND_DYLIB: BindDylib(i32) = {
+    BIND_SPECIAL_DYLIB_SELF = 0,
+    BIND_SPECIAL_DYLIB_MAIN_EXECUTABLE = -1,
+    BIND_SPECIAL_DYLIB_FLAT_LOOKUP = -2,
+    BIND_SPECIAL_DYLIB_WEAK_LOOKUP = -3,
+});
+
+newtype!(
+    struct BindSymbolFlags(u8);
+);
+
+newtype_flag_names!(NAMES_BIND_SYMBOL_FLAGS: BindSymbolFlags(u8) = {
+    BIND_SYMBOL_FLAGS_WEAK_IMPORT = 0x1,
+    BIND_SYMBOL_FLAGS_NON_WEAK_DEFINITION = 0x8,
+});
+
+newtype!(
+    struct BindOpcode(u8);
+);
 
 pub const BIND_OPCODE_MASK: u8 = 0xF0;
 pub const BIND_IMMEDIATE_MASK: u8 = 0x0F;
-pub const BIND_OPCODE_DONE: u8 = 0x00;
-pub const BIND_OPCODE_SET_DYLIB_ORDINAL_IMM: u8 = 0x10;
-pub const BIND_OPCODE_SET_DYLIB_ORDINAL_ULEB: u8 = 0x20;
-pub const BIND_OPCODE_SET_DYLIB_SPECIAL_IMM: u8 = 0x30;
-pub const BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM: u8 = 0x40;
-pub const BIND_OPCODE_SET_TYPE_IMM: u8 = 0x50;
-pub const BIND_OPCODE_SET_ADDEND_SLEB: u8 = 0x60;
-pub const BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB: u8 = 0x70;
-pub const BIND_OPCODE_ADD_ADDR_ULEB: u8 = 0x80;
-pub const BIND_OPCODE_DO_BIND: u8 = 0x90;
-pub const BIND_OPCODE_DO_BIND_ADD_ADDR_ULEB: u8 = 0xA0;
-pub const BIND_OPCODE_DO_BIND_ADD_ADDR_IMM_SCALED: u8 = 0xB0;
-pub const BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB: u8 = 0xC0;
-pub const BIND_OPCODE_THREADED: u8 = 0xD0;
-pub const BIND_SUBOPCODE_THREADED_SET_BIND_ORDINAL_TABLE_SIZE_ULEB: u8 = 0x00;
-pub const BIND_SUBOPCODE_THREADED_APPLY: u8 = 0x01;
+
+newtype_constant_names!(NAMES_BIND_OPCODE: BindOpcode(u8) = {
+    BIND_OPCODE_DONE = 0x00,
+    BIND_OPCODE_SET_DYLIB_ORDINAL_IMM = 0x10,
+    BIND_OPCODE_SET_DYLIB_ORDINAL_ULEB = 0x20,
+    BIND_OPCODE_SET_DYLIB_SPECIAL_IMM = 0x30,
+    BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM = 0x40,
+    BIND_OPCODE_SET_TYPE_IMM = 0x50,
+    BIND_OPCODE_SET_ADDEND_SLEB = 0x60,
+    BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB = 0x70,
+    BIND_OPCODE_ADD_ADDR_ULEB = 0x80,
+    BIND_OPCODE_DO_BIND = 0x90,
+    BIND_OPCODE_DO_BIND_ADD_ADDR_ULEB = 0xA0,
+    BIND_OPCODE_DO_BIND_ADD_ADDR_IMM_SCALED = 0xB0,
+    BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB = 0xC0,
+    BIND_OPCODE_THREADED = 0xD0,
+});
+
+newtype!(
+    struct BindSubopcodeThreaded(u8);
+);
+
+newtype_constant_names!(NAMES_BIND_SUBOPCODE_THREADED: BindSubopcodeThreaded(u8) = {
+    BIND_SUBOPCODE_THREADED_SET_BIND_ORDINAL_TABLE_SIZE_ULEB = 0x00,
+    BIND_SUBOPCODE_THREADED_APPLY = 0x01,
+});
 
 /*
  * The following are used on the flags byte of a terminal node
@@ -3393,7 +3476,7 @@ newtype!(
 );
 
 // Names are context-dependent.
-newtype_flag_names!(NAMES_N_DESC: SymbolDesc(u16) = {});
+newtype_flag_names!(SymbolDesc(u16) = {});
 
 impl SymbolDesc {
     /// All possible flag value names for defined symbols.
@@ -3436,7 +3519,7 @@ impl SymbolDesc {
 
     /// Get the alignment for common symbols.
     ///
-    /// This is a power of 2 from 1 to 15. A value of 0 mean that the natural
+    /// This is a power of 2 from 1 to 15. A value of 0 means that the natural
     /// alignment based on the size is used.
     ///
     /// Common symbols are represented by undefined (`N_UNDF`) external (`N_EXT`) symbols
@@ -3804,7 +3887,7 @@ impl<E: Endian> Relocation<E> {
                 r_pcrel: ((r_word1 >> 24) & 0x1) != 0,
                 r_length: ((r_word1 >> 25) & 0x3) as u8,
                 r_extern: ((r_word1 >> 27) & 0x1) != 0,
-                r_type: (r_word1 >> 28) as u8,
+                r_type: RelocationType((r_word1 >> 28) as u8),
             }
         } else {
             RelocationInfo {
@@ -3813,7 +3896,7 @@ impl<E: Endian> Relocation<E> {
                 r_pcrel: ((r_word1 >> 7) & 0x1) != 0,
                 r_length: ((r_word1 >> 5) & 0x3) as u8,
                 r_extern: ((r_word1 >> 4) & 0x1) != 0,
-                r_type: (r_word1 & 0xf) as u8,
+                r_type: RelocationType((r_word1 & 0xf) as u8),
             }
         }
     }
@@ -3824,7 +3907,7 @@ impl<E: Endian> Relocation<E> {
         let r_value = self.r_word1.get(endian);
         ScatteredRelocationInfo {
             r_address: r_word0 & 0x00ff_ffff,
-            r_type: ((r_word0 >> 24) & 0xf) as u8,
+            r_type: RelocationType(((r_word0 >> 24) & 0xf) as u8),
             r_length: ((r_word0 >> 28) & 0x3) as u8,
             r_pcrel: ((r_word0 >> 30) & 0x1) != 0,
             r_value,
@@ -3854,7 +3937,7 @@ pub struct RelocationInfo {
     /// does not include value of sym referenced
     pub r_extern: bool,
     /// if not 0, machine specific relocation type
-    pub r_type: u8,
+    pub r_type: RelocationType,
 }
 
 impl RelocationInfo {
@@ -3868,13 +3951,13 @@ impl RelocationInfo {
                     | u32::from(self.r_pcrel) << 24
                     | u32::from(self.r_length & 0x3) << 25
                     | u32::from(self.r_extern) << 27
-                    | u32::from(self.r_type) << 28
+                    | u32::from(self.r_type.0) << 28
             } else {
                 self.r_symbolnum >> 8
                     | u32::from(self.r_pcrel) << 7
                     | u32::from(self.r_length & 0x3) << 5
                     | u32::from(self.r_extern) << 4
-                    | u32::from(self.r_type) & 0xf
+                    | u32::from(self.r_type.0) & 0xf
             },
         );
         Relocation { r_word0, r_word1 }
@@ -3955,7 +4038,7 @@ pub struct ScatteredRelocationInfo {
     /// offset in the section to what is being relocated
     pub r_address: u32,
     /// if not 0, machine specific relocation type
-    pub r_type: u8,
+    pub r_type: RelocationType,
     /// 0=byte, 1=word, 2=long, 3=quad
     pub r_length: u8,
     /// was relocated pc relative already
@@ -3970,7 +4053,7 @@ impl ScatteredRelocationInfo {
         let r_word0 = U32::new(
             endian,
             self.r_address & 0x00ff_ffff
-                | u32::from(self.r_type & 0xf) << 24
+                | u32::from(self.r_type.0 & 0xf) << 24
                 | u32::from(self.r_length & 0x3) << 28
                 | u32::from(self.r_pcrel) << 30
                 | R_SCATTERED,
@@ -3979,6 +4062,13 @@ impl ScatteredRelocationInfo {
         Relocation { r_word0, r_word1 }
     }
 }
+
+newtype!(
+    /// Values for `RelocationInfo::r_type` and `ScatteredRelocationInfo::r_type`.
+    struct RelocationType(u8);
+);
+
+newtype_constant_names!(RelocationType(u8) = {});
 
 /*
  * Relocation types used in a generic implementation.  Relocation entries for
@@ -3998,7 +4088,9 @@ impl ScatteredRelocationInfo {
  * using the GENERIC_RELOC_PB_LA_PTR r_type.  This is a scattered relocation
  * entry where the r_value feild is the value of the lazy pointer not prebound.
  */
-constant_names!(NAMES_GENERIC_RELOC: u8 = {
+constant_names!(
+/// Values for `Relocation::r_type` for generic Mach-O architectures.
+pub NAMES_GENERIC_RELOC: RelocationType(u8) = {
     /// generic relocation as described above
     GENERIC_RELOC_VANILLA = 0,
     /// Only follows a GENERIC_RELOC_SECTDIFF
@@ -4021,7 +4113,9 @@ constant_names!(NAMES_GENERIC_RELOC: u8 = {
  * for instructions.  Since they are for instructions the r_address field
  * indicates the 32 bit instruction that the relocation is to be performed on.
  */
-constant_names!(NAMES_ARM_RELOC: u8 = {
+constant_names!(
+/// Values for `Relocation::r_type` on ARM.
+pub NAMES_ARM_RELOC: RelocationType(u8) = {
     /// generic relocation as described above
     ARM_RELOC_VANILLA = 0,
     /// the second relocation entry of a pair
@@ -4061,7 +4155,9 @@ constant_names!(NAMES_ARM_RELOC: u8 = {
 /*
  * Relocation types used in the arm64 implementation.
  */
-constant_names!(NAMES_ARM64_RELOC: u8 = {
+constant_names!(
+/// Values for `Relocation::r_type` on ARM64.
+pub NAMES_ARM64_RELOC: RelocationType(u8) = {
     /// for pointers
     ARM64_RELOC_UNSIGNED = 0,
     /// must be followed by a ARM64_RELOC_UNSIGNED
@@ -4124,7 +4220,9 @@ constant_names!(NAMES_ARM64_RELOC: u8 = {
  * the value of the Y-bit if the sign of the displacement changes for non-branch
  * always conditions.
  */
-constant_names!(NAMES_PPC_RELOC: u8 = {
+constant_names!(
+/// Values for `Relocation::r_type` on PowerPC.
+pub NAMES_PPC_RELOC: RelocationType(u8) = {
     /// generic relocation as described above
     PPC_RELOC_VANILLA = 0,
     /// the second relocation entry of a pair
@@ -4311,7 +4409,9 @@ constant_names!(NAMES_PPC_RELOC: u8 = {
  * the containing image was loaded from its base address (e.g. slide).
  *
  */
-constant_names!(NAMES_X86_64_RELOC: u8 = {
+constant_names!(
+/// Values for `Relocation::r_type` on x86_64.
+pub NAMES_X86_64_RELOC: RelocationType(u8) = {
     /// for absolute addresses
     X86_64_RELOC_UNSIGNED = 0,
     /// for signed 32-bit displacement
@@ -4333,6 +4433,1021 @@ constant_names!(NAMES_X86_64_RELOC: u8 = {
     /// for thread local variables
     X86_64_RELOC_TLV = 9,
 });
+
+// Definitions from https://github.com/apple-oss-distributions/dyld/blob/dyld-1376.6/include/mach-o/fixup-chains.h
+
+// Header of the `LC_DYLD_CHAINED_FIXUPS` payload.
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct DyldChainedFixupsHeader<E: Endian> {
+    /// 0
+    pub fixups_version: U32<E>,
+    /// offset of `DyldChainedStartsInImage` in chain_data
+    pub starts_offset: U32<E>,
+    /// offset of imports table in chain_data
+    pub imports_offset: U32<E>,
+    /// offset of symbol strings in chain_data
+    pub symbols_offset: U32<E>,
+    /// number of imported symbol names
+    pub imports_count: U32<E>,
+    /// `DYLD_CHAINED_IMPORT*`
+    pub imports_format: U32<E, DyldChainedImportFormat>,
+    /// 0 => uncompressed, 1 => zlib compressed
+    pub symbols_format: U32<E>,
+}
+
+/// Holds the chain starts for each segment in the image.
+///
+/// This struct is embedded in `LC_DYLD_CHAINED_FIXUPS` payload.
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct DyldChainedStartsInImage<E: Endian> {
+    pub seg_count: U32<E>,
+    // Each entry is offset into this struct for that segment
+    // followed by pool of `DyldChainedStartsInSegment` data.
+    //pub seg_info_offset: [U32<E>; 1],
+}
+
+/// Holds the chain starts for each page in a segment.
+///
+/// This struct is embedded in `DyldChainedStartsInImage`.
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct DyldChainedStartsInSegment<E: Endian> {
+    /// size of this (amount kernel needs to copy)
+    pub size: U32<E>,
+    /// 0x1000 or 0x4000
+    pub page_size: U16<E>,
+    /// `DYLD_CHAINED_PTR_*`
+    pub pointer_format: U16<E, DyldChainedPtrFormat>,
+    /// offset in memory to start of segment
+    pub segment_offset: U64<E>,
+    /// for 32-bit OS, any value beyond this is not a pointer
+    pub max_valid_pointer: U32<E>,
+    /// how many pages are in array
+    pub page_count: U16<E>,
+    // each entry is offset in each page of first element in chain
+    // or DYLD_CHAINED_PTR_START_NONE if no fixups on page
+    //pub page_start: [U16<E>; 1],
+    // some 32-bit formats may require multiple starts per page.
+    // for those, if high bit is set in page_starts[], then it
+    // is index into chain_starts[] which is a list of starts
+    // the last of which has the high bit set
+    //pub chain_starts: [U16<E>; 1],
+}
+
+/// Used in `DyldChainedStartsInSegment::page_start[]` to denote a page with no fixups.
+pub const DYLD_CHAINED_PTR_START_NONE: u16 = 0xFFFF;
+/// Used in `DyldChainedStartsInSegment::page_start[]` to denote a page which has multiple starts.
+pub const DYLD_CHAINED_PTR_START_MULTI: u16 = 0x8000;
+/// Used in `DyldChainedStartsInSegment::chain_starts[]` to denote last start in list for page.
+pub const DYLD_CHAINED_PTR_START_LAST: u16 = 0x8000;
+
+// these values are set in the reserved1 field of the __chain_starts section
+/*
+enum {
+    /// denotes chain starts linked with -fixup_chains_section
+    DYLD_CHAINED_STARTS_USE_FILE_OFFSET = 0x1,
+    /// denotes chain starts linked with -fixup_chains_section_vm
+    DYLD_CHAINED_STARTS_USE_VM_OFFSET   = 0x2,
+};
+*/
+
+/// Holds the chain starts in the `__TEXT,__chain_starts` section in firmware.
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct DyldChainedStartsOffsets<E: Endian> {
+    /// `DYLD_CHAINED_PTR_32_FIRMWARE` or `DYLD_CHAINED_PTR_ARM64E_FIRMWARE`
+    pub pointer_format: U32<E, DyldChainedPtrFormat>,
+    /// number of starts in array
+    pub starts_count: U32<E>,
+    // array chain start offsets
+    //pub chain_starts: [U32<E>; 1],
+}
+
+newtype!(
+    /// Value for `DyldChainedStartsInSegment::pointer_format`.
+    struct DyldChainedPtrFormat(u16);
+);
+
+newtype_constant_names!(NAMES_DYLD_CHAINED_PTR: DyldChainedPtrFormat(u16) = {
+    /// stride 8, unauth target is vmaddr
+    DYLD_CHAINED_PTR_ARM64E                 =  1,
+    /// target is vmaddr
+    DYLD_CHAINED_PTR_64                     =  2,
+    /// target is vmaddr
+    DYLD_CHAINED_PTR_32                     =  3,
+    DYLD_CHAINED_PTR_32_CACHE               =  4,
+    DYLD_CHAINED_PTR_32_FIRMWARE            =  5,
+    /// target is vm offset
+    DYLD_CHAINED_PTR_64_OFFSET              =  6,
+    /// stride 4, unauth target is vm offset
+    DYLD_CHAINED_PTR_ARM64E_KERNEL          =  7,
+    /// old name
+    DYLD_CHAINED_PTR_ARM64E_OFFSET          =  7,
+    DYLD_CHAINED_PTR_64_KERNEL_CACHE        =  8,
+    /// stride 8, unauth target is vm offset
+    DYLD_CHAINED_PTR_ARM64E_USERLAND        =  9,
+    /// stride 4, unauth target is vmaddr
+    DYLD_CHAINED_PTR_ARM64E_FIRMWARE        = 10,
+    /// stride 1, x86_64 kernel caches
+    DYLD_CHAINED_PTR_X86_64_KERNEL_CACHE    = 11,
+    /// stride 8, unauth target is vm offset, 24-bit bind
+    DYLD_CHAINED_PTR_ARM64E_USERLAND24      = 12,
+    /// stride 8, regular/auth targets both vm offsets
+    DYLD_CHAINED_PTR_ARM64E_SHARED_CACHE    = 13,
+    /// stride 4, rebase offsets use segIndex and segOffset
+    DYLD_CHAINED_PTR_ARM64E_SEGMENTED       = 14,
+});
+
+/// A chained pointer for `DYLD_CHAINED_PTR_ARM64E` and `DYLD_CHAINED_PTR_ARM64E_USERLAND24`.
+#[derive(Debug, Clone, Copy)]
+pub struct DyldChainedPtrArm64e(pub u64);
+
+impl DyldChainedPtrArm64e {
+    /// The offset to the next chained pointer, in units of the stride.
+    pub fn next(self) -> u64 {
+        (self.0 >> 51) & ((1 << 11) - 1)
+    }
+
+    /// Whether this is a bind or a rebase.
+    pub fn is_bind(self) -> bool {
+        (self.0 >> 62) & 1 != 0
+    }
+
+    /// Whether the pointer is authenticated.
+    pub fn is_auth(self) -> bool {
+        (self.0 >> 63) & 1 != 0
+    }
+
+    /// Get the bind fields.
+    pub fn bind(self) -> DyldChainedPtrArm64eBind {
+        DyldChainedPtrArm64eBind(self.0)
+    }
+
+    /// Get the authenticated bind fields.
+    pub fn auth_bind(self) -> DyldChainedPtrArm64eAuthBind {
+        DyldChainedPtrArm64eAuthBind(self.0)
+    }
+
+    /// Get the rebase fields.
+    pub fn rebase(self) -> DyldChainedPtrArm64eRebase {
+        DyldChainedPtrArm64eRebase(self.0)
+    }
+
+    /// Get the authenticated rebase fields.
+    pub fn auth_rebase(self) -> DyldChainedPtrArm64eAuthRebase {
+        DyldChainedPtrArm64eAuthRebase(self.0)
+    }
+
+    /// Get the 24-bit bind fields.
+    pub fn bind24(self) -> DyldChainedPtrArm64eBind24 {
+        DyldChainedPtrArm64eBind24(self.0)
+    }
+
+    /// Get the authenticated 24-bit bind fields.
+    pub fn auth_bind24(self) -> DyldChainedPtrArm64eAuthBind24 {
+        DyldChainedPtrArm64eAuthBind24(self.0)
+    }
+}
+
+/// The unauthenticated rebase fields for [`DyldChainedPtrArm64e`].
+#[derive(Debug, Clone, Copy)]
+pub struct DyldChainedPtrArm64eRebase(pub u64);
+
+impl DyldChainedPtrArm64eRebase {
+    /// The unauthenticated target.
+    pub fn target(self) -> u64 {
+        self.0 & ((1 << 43) - 1)
+    }
+
+    /// The top 8 bits of the pointer.
+    pub fn high8(self) -> u64 {
+        (self.0 >> 43) & 0xff
+    }
+}
+
+/// The authenticated rebase fields for [`DyldChainedPtrArm64e`].
+#[derive(Debug, Clone, Copy)]
+pub struct DyldChainedPtrArm64eAuthRebase(pub u64);
+
+impl DyldChainedPtrArm64eAuthRebase {
+    /// The runtime offset target.
+    pub fn runtime_offset(self) -> u64 {
+        self.0 & ((1 << 32) - 1)
+    }
+
+    /// The diversity value for authentication.
+    pub fn diversity(self) -> u16 {
+        ((self.0 >> 32) & 0xffff) as u16
+    }
+
+    /// Whether to use address diversity for authentication.
+    pub fn addr_div(self) -> bool {
+        (self.0 >> 48) & 1 != 0
+    }
+
+    /// The key for authentication.
+    pub fn key(self) -> u8 {
+        ((self.0 >> 49) & 3) as u8
+    }
+}
+
+/// The unauthenticated bind fields for [`DyldChainedPtrArm64e`].
+#[derive(Debug, Clone, Copy)]
+pub struct DyldChainedPtrArm64eBind(pub u64);
+
+impl DyldChainedPtrArm64eBind {
+    /// The import ordinal.
+    pub fn ordinal(self) -> u32 {
+        (self.0 & 0xffff) as u32
+    }
+
+    /// The signed 19-bit addend.
+    pub fn addend(self) -> i32 {
+        // Sign extend.
+        ((self.0 >> 19) as i32) >> 13
+    }
+}
+
+/// The authenticated bind fields for [`DyldChainedPtrArm64e`].
+#[derive(Debug, Clone, Copy)]
+pub struct DyldChainedPtrArm64eAuthBind(pub u64);
+
+impl DyldChainedPtrArm64eAuthBind {
+    /// The import ordinal.
+    pub fn ordinal(self) -> u32 {
+        (self.0 & 0xffff) as u32
+    }
+
+    /// The diversity value for authentication.
+    pub fn diversity(self) -> u16 {
+        ((self.0 >> 32) & 0xffff) as u16
+    }
+
+    /// Whether to use address diversity for authentication.
+    pub fn addr_div(self) -> bool {
+        (self.0 >> 48) & 1 != 0
+    }
+
+    /// The key for authentication.
+    pub fn key(self) -> u8 {
+        ((self.0 >> 49) & 3) as u8
+    }
+}
+
+/// The unauthenticated bind fields for `DYLD_CHAINED_PTR_ARM64E_USERLAND24`.
+#[derive(Debug, Clone, Copy)]
+pub struct DyldChainedPtrArm64eBind24(pub u64);
+
+impl DyldChainedPtrArm64eBind24 {
+    /// The 24-bit import ordinal.
+    pub fn ordinal(self) -> u32 {
+        (self.0 & ((1 << 24) - 1)) as u32
+    }
+
+    /// The signed 19-bit addend.
+    pub fn addend(self) -> i32 {
+        // Sign extend.
+        ((self.0 >> 19) as i32) >> 13
+    }
+}
+
+/// The authenticated bind fields for `DYLD_CHAINED_PTR_ARM64E_USERLAND24`.
+#[derive(Debug, Clone, Copy)]
+pub struct DyldChainedPtrArm64eAuthBind24(pub u64);
+
+impl DyldChainedPtrArm64eAuthBind24 {
+    /// The 24-bit import ordinal.
+    pub fn ordinal(self) -> u32 {
+        (self.0 & ((1 << 24) - 1)) as u32
+    }
+
+    /// The diversity value for authentication.
+    pub fn diversity(self) -> u16 {
+        ((self.0 >> 32) & 0xffff) as u16
+    }
+
+    /// Whether to use address diversity for authentication.
+    pub fn addr_div(self) -> bool {
+        (self.0 >> 48) & 1 != 0
+    }
+
+    /// The key for authentication.
+    pub fn key(self) -> u8 {
+        ((self.0 >> 49) & 3) as u8
+    }
+}
+
+/// A chained pointer for `DYLD_CHAINED_PTR_ARM64E_SEGMENTED`.
+#[derive(Debug, Clone, Copy)]
+pub struct DyldChainedPtrArm64eSegmentedRebase(pub u64);
+
+impl DyldChainedPtrArm64eSegmentedRebase {
+    /// The offset to the next chained pointer, in units of the stride.
+    pub fn next(self) -> u64 {
+        (self.0 >> 51) & ((1 << 12) - 1)
+    }
+
+    /// Whether the pointer is authenticated.
+    pub fn is_auth(self) -> bool {
+        (self.0 >> 63) & 1 != 0
+    }
+
+    /// The offset in the segment.
+    pub fn target_seg_offset(self) -> u64 {
+        self.0 & ((1 << 28) - 1)
+    }
+
+    /// The index into the segment address table.
+    pub fn target_seg_index(self) -> u8 {
+        ((self.0 >> 28) & 0xf) as u8
+    }
+
+    /// The diversity value for authentication.
+    ///
+    /// Only valid if `is_auth` is true.
+    pub fn diversity(self) -> u16 {
+        ((self.0 >> 32) & 0xffff) as u16
+    }
+
+    /// Whether to use address diversity for authentication.
+    ///
+    /// Only valid if `is_auth` is true.
+    pub fn addr_div(self) -> bool {
+        (self.0 >> 48) & 1 != 0
+    }
+
+    /// The key for authentication.
+    ///
+    /// Only valid if `is_auth` is true.
+    pub fn key(self) -> u8 {
+        ((self.0 >> 49) & 3) as u8
+    }
+}
+
+/// A chained pointer for `DYLD_CHAINED_PTR_64` and `DYLD_CHAINED_PTR_64_OFFSET`.
+#[derive(Debug, Clone, Copy)]
+pub struct DyldChainedPtr64(pub u64);
+
+impl DyldChainedPtr64 {
+    /// The offset to the next chained pointer, in units of the stride.
+    pub fn next(self) -> u64 {
+        (self.0 >> 51) & ((1 << 12) - 1)
+    }
+
+    /// Whether this is a bind or a rebase.
+    pub fn is_bind(self) -> bool {
+        (self.0 >> 63) & 1 != 0
+    }
+
+    /// Get the bind fields.
+    pub fn bind(self) -> DyldChainedPtr64Bind {
+        DyldChainedPtr64Bind(self.0)
+    }
+
+    /// Get the rebase fields.
+    pub fn rebase(self) -> DyldChainedPtr64Rebase {
+        DyldChainedPtr64Rebase(self.0)
+    }
+}
+
+/// The rebase fields for [`DyldChainedPtr64`].
+#[derive(Debug, Clone, Copy)]
+pub struct DyldChainedPtr64Rebase(pub u64);
+
+impl DyldChainedPtr64Rebase {
+    /// The target.
+    ///
+    /// A vmaddr for `DYLD_CHAINED_PTR_64`, or a runtime offset for
+    /// `DYLD_CHAINED_PTR_64_OFFSET`.
+    pub fn target(self) -> u64 {
+        self.0 & ((1 << 36) - 1)
+    }
+
+    /// The top 8 bits of the pointer.
+    pub fn high8(self) -> u64 {
+        (self.0 >> 36) & 0xff
+    }
+}
+
+/// The bind fields for [`DyldChainedPtr64`].
+#[derive(Debug, Clone, Copy)]
+pub struct DyldChainedPtr64Bind(pub u64);
+
+impl DyldChainedPtr64Bind {
+    /// The 24-bit import ordinal.
+    pub fn ordinal(self) -> u32 {
+        (self.0 & ((1 << 24) - 1)) as u32
+    }
+
+    /// The unsigned 8-bit addend.
+    pub fn addend(self) -> i32 {
+        // No sign extend.
+        ((self.0 >> 24) & 0xff) as i32
+    }
+}
+
+/// A chained pointer for `DYLD_CHAINED_PTR_64_KERNEL_CACHE` and
+/// `DYLD_CHAINED_PTR_X86_64_KERNEL_CACHE`.
+#[derive(Debug, Clone, Copy)]
+pub struct DyldChainedPtr64KernelCacheRebase(pub u64);
+
+impl DyldChainedPtr64KernelCacheRebase {
+    /// The offset to the next chained pointer, in units of the stride.
+    pub fn next(self) -> u64 {
+        (self.0 >> 51) & ((1 << 12) - 1)
+    }
+
+    /// Whether the pointer is authenticated.
+    pub fn is_auth(self) -> bool {
+        (self.0 >> 63) & 1 != 0
+    }
+
+    /// The target.
+    pub fn target(self) -> u64 {
+        self.0 & ((1 << 30) - 1)
+    }
+
+    /// The cache level to bind to.
+    pub fn cache_level(self) -> u8 {
+        ((self.0 >> 30) & 3) as u8
+    }
+
+    /// The diversity value for authentication.
+    ///
+    /// Only valid if `is_auth` is true.
+    pub fn diversity(self) -> u16 {
+        ((self.0 >> 32) & 0xffff) as u16
+    }
+
+    /// Whether to use address diversity for authentication.
+    ///
+    /// Only valid if `is_auth` is true.
+    pub fn addr_div(self) -> bool {
+        (self.0 >> 48) & 1 != 0
+    }
+
+    /// The key for authentication.
+    ///
+    /// Only valid if `is_auth` is true.
+    pub fn key(self) -> u8 {
+        ((self.0 >> 49) & 3) as u8
+    }
+}
+
+/// A chained pointer for `DYLD_CHAINED_PTR_32`.
+#[derive(Debug, Clone, Copy)]
+pub struct DyldChainedPtr32(pub u32);
+
+impl DyldChainedPtr32 {
+    /// The offset to the next chained pointer, in units of the stride.
+    pub fn next(self) -> u32 {
+        (self.0 >> 26) & ((1 << 5) - 1)
+    }
+
+    /// Whether this is a bind or a rebase.
+    pub fn is_bind(self) -> bool {
+        (self.0 >> 31) & 1 != 0
+    }
+
+    /// Get the bind fields.
+    pub fn bind(self) -> DyldChainedPtr32Bind {
+        DyldChainedPtr32Bind(self.0)
+    }
+
+    /// Get the rebase fields.
+    pub fn rebase(self) -> DyldChainedPtr32Rebase {
+        DyldChainedPtr32Rebase(self.0)
+    }
+}
+
+/// The rebase fields for [`DyldChainedPtr32`].
+#[derive(Debug, Clone, Copy)]
+pub struct DyldChainedPtr32Rebase(pub u32);
+
+impl DyldChainedPtr32Rebase {
+    /// The target vmaddr.
+    pub fn target(self) -> u32 {
+        self.0 & ((1 << 26) - 1)
+    }
+}
+
+/// The bind fields for [`DyldChainedPtr32`].
+#[derive(Debug, Clone, Copy)]
+pub struct DyldChainedPtr32Bind(pub u32);
+
+impl DyldChainedPtr32Bind {
+    /// The import ordinal.
+    pub fn ordinal(self) -> u32 {
+        self.0 & ((1 << 20) - 1)
+    }
+
+    /// The unsigned 6-bit addend.
+    pub fn addend(self) -> i32 {
+        // No sign extend.
+        ((self.0 >> 20) & ((1 << 6) - 1)) as i32
+    }
+}
+
+/// A chained pointer for `DYLD_CHAINED_PTR_32_CACHE`.
+#[derive(Debug, Clone, Copy)]
+pub struct DyldChainedPtr32CacheRebase(pub u32);
+
+impl DyldChainedPtr32CacheRebase {
+    /// The target.
+    pub fn target(self) -> u32 {
+        self.0 & ((1 << 30) - 1)
+    }
+
+    /// The offset to the next chained pointer, in units of the stride.
+    pub fn next(self) -> u32 {
+        (self.0 >> 30) & ((1 << 2) - 1)
+    }
+}
+
+/// A chained pointer for `DYLD_CHAINED_PTR_32_FIRMWARE`.
+#[derive(Debug, Clone, Copy)]
+pub struct DyldChainedPtr32FirmwareRebase(pub u32);
+
+impl DyldChainedPtr32FirmwareRebase {
+    /// The target.
+    pub fn target(self) -> u32 {
+        self.0 & ((1 << 26) - 1)
+    }
+
+    /// The offset to the next chained pointer, in units of the stride.
+    pub fn next(self) -> u32 {
+        (self.0 >> 26) & ((1 << 6) - 1)
+    }
+}
+
+/// A chained pointer for `DYLD_CHAINED_PTR_ARM64E_SHARED_CACHE`.
+#[derive(Debug, Clone, Copy)]
+pub struct DyldChainedPtrArm64eSharedCache(pub u64);
+
+impl DyldChainedPtrArm64eSharedCache {
+    /// The offset to the next chained pointer, in units of the stride.
+    pub fn next(self) -> u64 {
+        (self.0 >> 52) & ((1 << 11) - 1)
+    }
+    /// Whether the pointer is authenticated.
+    pub fn is_auth(self) -> bool {
+        (self.0 >> 63) & 1 != 0
+    }
+
+    /// Get the rebase fields.
+    pub fn rebase(self) -> DyldChainedPtrArm64eSharedCacheRebase {
+        DyldChainedPtrArm64eSharedCacheRebase(self.0)
+    }
+
+    /// Get the authenticated rebase fields.
+    pub fn auth_rebase(self) -> DyldChainedPtrArm64eSharedCacheAuthRebase {
+        DyldChainedPtrArm64eSharedCacheAuthRebase(self.0)
+    }
+}
+
+/// The unauthenticated rebase fields for [`DyldChainedPtrArm64eSharedCache`].
+#[derive(Debug, Clone, Copy)]
+pub struct DyldChainedPtrArm64eSharedCacheRebase(pub u64);
+
+impl DyldChainedPtrArm64eSharedCacheRebase {
+    /// The offset from the start of the shared cache.
+    pub fn runtime_offset(self) -> u64 {
+        self.0 & ((1 << 34) - 1)
+    }
+
+    /// The top 8 bits of the pointer.
+    ///
+    /// Only valid if `is_auth` is false.
+    pub fn high8(self) -> u64 {
+        (self.0 >> 34) & 0xff
+    }
+}
+
+/// The authenticated rebase fields for [`DyldChainedPtrArm64eSharedCache`].
+#[derive(Debug, Clone, Copy)]
+pub struct DyldChainedPtrArm64eSharedCacheAuthRebase(pub u64);
+
+impl DyldChainedPtrArm64eSharedCacheAuthRebase {
+    /// The offset from the start of the shared cache.
+    pub fn runtime_offset(self) -> u64 {
+        self.0 & ((1 << 34) - 1)
+    }
+
+    /// The diversity value for authentication.
+    pub fn diversity(self) -> u16 {
+        ((self.0 >> 34) & 0xffff) as u16
+    }
+
+    /// Whether to use address diversity for authentication.
+    pub fn addr_div(self) -> bool {
+        (self.0 >> 50) & 1 != 0
+    }
+
+    /// Whether the key is IA (false) or DA (true).
+    pub fn key_is_data(self) -> bool {
+        (self.0 >> 51) & 1 != 0
+    }
+}
+
+newtype!(
+    /// Value for `DyldChainedFixupsHeader::imports_format`.
+    struct DyldChainedImportFormat(u32);
+);
+
+newtype_constant_names!(NAMES_DYLD_CHAINED_IMPORT_FORMAT: DyldChainedImportFormat(u32) = {
+    DYLD_CHAINED_IMPORT = 1,
+    DYLD_CHAINED_IMPORT_ADDEND = 2,
+    DYLD_CHAINED_IMPORT_ADDEND64 = 3,
+});
+
+newtype!(
+    /// An entry in the imports table, for `DYLD_CHAINED_IMPORT` and `DYLD_CHAINED_IMPORT_ADDEND`.
+    ///
+    /// For `DYLD_CHAINED_IMPORT_ADDEND`, this is followed by an i32 addend.
+    #[derive(Debug)]
+    struct DyldChainedImport32(u32);
+);
+
+impl DyldChainedImport32 {
+    /// The ordinal of the library that the symbol is imported from.
+    ///
+    /// `0` and `0xF1..` are special `BindDylib` values.
+    pub fn lib_ordinal(self) -> u8 {
+        (self.0 & 0xff) as u8
+    }
+
+    /// Return `lib_ordinal` as a `BindDylib`.
+    pub fn dylib(self) -> BindDylib {
+        let lib_ordinal = self.lib_ordinal();
+        if lib_ordinal > 0xf0 {
+            BindDylib((lib_ordinal as i8).into())
+        } else {
+            BindDylib(lib_ordinal.into())
+        }
+    }
+
+    /// Whether this is a weak import.
+    pub fn weak_import(self) -> bool {
+        (self.0 >> 8) & 1 != 0
+    }
+
+    /// The offset of the symbol name in the symbol string pool.
+    pub fn name_offset(self) -> u32 {
+        self.0 >> 9
+    }
+}
+
+newtype!(
+    /// An entry in the imports table, for `DYLD_CHAINED_IMPORT_ADDEND64`.
+    ///
+    /// This is followed by a u64 addend.
+    #[derive(Debug)]
+    struct DyldChainedImport64(u64);
+);
+
+impl DyldChainedImport64 {
+    /// The ordinal of the library that the symbol is imported from.
+    ///
+    /// `0` and `0xFFF1..` are special `BindDylib` values.
+    pub fn lib_ordinal(self) -> u16 {
+        (self.0 & 0xffff) as u16
+    }
+
+    /// Return `lib_ordinal` as a `BindDylib`.
+    pub fn dylib(self) -> BindDylib {
+        let lib_ordinal = self.lib_ordinal();
+        if lib_ordinal > 0xfff0 {
+            BindDylib((lib_ordinal as i16).into())
+        } else {
+            BindDylib(lib_ordinal.into())
+        }
+    }
+
+    /// Whether this is a weak import.
+    pub fn weak_import(self) -> bool {
+        (self.0 >> 16) & 1 != 0
+    }
+
+    /// The offset of the symbol name in the symbol string pool.
+    pub fn name_offset(self) -> u32 {
+        (self.0 >> 32) as u32
+    }
+}
+
+// Definitions from:
+// https://github.com/apple-oss-distributions/xnu/blob/rel/xnu-12377/osfmk/kern/cs_blobs.h
+
+newtype!(
+    struct CsFlags(u32);
+);
+
+newtype_flag_names!(NAMES_CS: CsFlags(u32) = {
+    /// dynamically valid
+    CS_VALID = 0x00000001,
+    /// ad hoc signed
+    CS_ADHOC = 0x00000002,
+    /// has get-task-allow entitlement
+    CS_GET_TASK_ALLOW = 0x00000004,
+    /// has installer entitlement
+    CS_INSTALLER = 0x00000008,
+
+    /// Library Validation required by Hardened System Policy
+    CS_FORCED_LV = 0x00000010,
+    /// (macOS Only) Page invalidation allowed by task port policy
+    CS_INVALID_ALLOWED = 0x00000020,
+
+    /// don't load invalid pages
+    CS_HARD = 0x00000100,
+    /// kill process if it becomes invalid
+    CS_KILL = 0x00000200,
+    /// force expiration checking
+    CS_CHECK_EXPIRATION = 0x00000400,
+    /// tell dyld to treat restricted
+    CS_RESTRICT = 0x00000800,
+
+    /// require enforcement
+    CS_ENFORCEMENT = 0x00001000,
+    /// require library validation
+    CS_REQUIRE_LV = 0x00002000,
+    /// code signature permits restricted entitlements
+    CS_ENTITLEMENTS_VALIDATED = 0x00004000,
+    /// has com.apple.rootless.restricted-nvram-variables.heritable entitlement
+    CS_NVRAM_UNRESTRICTED = 0x00008000,
+
+    /// Apply hardened runtime policies
+    CS_RUNTIME = 0x00010000,
+    /// Automatically signed by the linker
+    CS_LINKER_SIGNED = 0x00020000,
+
+    /// set CS_HARD on any exec'ed process
+    CS_EXEC_SET_HARD = 0x00100000,
+    /// set CS_KILL on any exec'ed process
+    CS_EXEC_SET_KILL = 0x00200000,
+    /// set CS_ENFORCEMENT on any exec'ed process
+    CS_EXEC_SET_ENFORCEMENT = 0x00400000,
+    /// set CS_INSTALLER on any exec'ed process
+    CS_EXEC_INHERIT_SIP = 0x00800000,
+
+    /// was killed by kernel for invalidity
+    CS_KILLED = 0x01000000,
+    /// kernel did not load a non-platform-binary dyld or Rosetta runtime
+    CS_NO_UNTRUSTED_HELPERS = 0x02000000,
+    /// old name
+    CS_DYLD_PLATFORM = CS_NO_UNTRUSTED_HELPERS.0,
+    /// this is a platform binary
+    CS_PLATFORM_BINARY = 0x04000000,
+    /// platform binary by the fact of path (osx only)
+    CS_PLATFORM_PATH = 0x08000000,
+
+    /// process is currently or has previously been debugged and allowed to run with invalid pages
+    CS_DEBUGGED = 0x10000000,
+    /// process has a signature (may have gone invalid)
+    CS_SIGNED = 0x20000000,
+    /// code is dev signed, cannot be loaded into prod signed code (will go away with rdar://problem/28322552)
+    CS_DEV_CODE = 0x40000000,
+    /// has Data Vault controller entitlement
+    CS_DATAVAULT_CONTROLLER = 0x80000000,
+});
+
+pub const CS_ALLOWED_MACHO: CsFlags = CS_ADHOC
+    .with(CS_HARD)
+    .with(CS_KILL)
+    .with(CS_CHECK_EXPIRATION)
+    .with(CS_RESTRICT)
+    .with(CS_ENFORCEMENT)
+    .with(CS_REQUIRE_LV)
+    .with(CS_RUNTIME)
+    .with(CS_LINKER_SIGNED);
+
+pub const CS_ENTITLEMENT_FLAGS: CsFlags = CS_GET_TASK_ALLOW
+    .with(CS_INSTALLER)
+    .with(CS_DATAVAULT_CONTROLLER)
+    .with(CS_NVRAM_UNRESTRICTED);
+
+newtype!(
+    struct CsExecSegFlags(u64);
+);
+
+newtype_flag_names!(NAMES_CS_EXECSEG: CsExecSegFlags(u64) = {
+    /// executable segment denotes main binary
+    CS_EXECSEG_MAIN_BINARY = 0x1,
+    /// allow unsigned pages (for debugging)
+    CS_EXECSEG_ALLOW_UNSIGNED = 0x10,
+    /// main binary is debugger
+    CS_EXECSEG_DEBUGGER = 0x20,
+    /// JIT enabled
+    CS_EXECSEG_JIT = 0x40,
+    /// OBSOLETE: skip library validation
+    CS_EXECSEG_SKIP_LV = 0x80,
+    /// can bless cdhash for execution
+    CS_EXECSEG_CAN_LOAD_CDHASH = 0x100,
+    /// can execute blessed cdhash
+    CS_EXECSEG_CAN_EXEC_CDHASH = 0x200,
+});
+
+/// single Requirement blob
+pub const CSMAGIC_REQUIREMENT: u32 = 0xfade0c00;
+/// Requirements vector (internal requirements)
+pub const CSMAGIC_REQUIREMENTS: u32 = 0xfade0c01;
+/// CodeDirectory blob
+pub const CSMAGIC_CODEDIRECTORY: u32 = 0xfade0c02;
+/// embedded form of signature data
+pub const CSMAGIC_EMBEDDED_SIGNATURE: u32 = 0xfade0cc0;
+pub const CSMAGIC_EMBEDDED_SIGNATURE_OLD: u32 = 0xfade0b02;
+/// embedded entitlements
+pub const CSMAGIC_EMBEDDED_ENTITLEMENTS: u32 = 0xfade7171;
+/// embedded DER encoded entitlements
+pub const CSMAGIC_EMBEDDED_DER_ENTITLEMENTS: u32 = 0xfade7172;
+/// multi-arch collection of embedded signatures
+pub const CSMAGIC_DETACHED_SIGNATURE: u32 = 0xfade0cc1;
+/// CMS Signature, among other things
+pub const CSMAGIC_BLOBWRAPPER: u32 = 0xfade0b01;
+/// Light weight code requirement
+pub const CSMAGIC_EMBEDDED_LAUNCH_CONSTRAINT: u32 = 0xfade8181;
+
+newtype!(
+    struct CsVersion(u32);
+);
+
+newtype_constant_names!(NAMES_CS_SUPPORT: CsVersion(u32) = {
+    CS_SUPPORTSSCATTER = 0x20100,
+    CS_SUPPORTSTEAMID = 0x20200,
+    CS_SUPPORTSCODELIMIT64 = 0x20300,
+    CS_SUPPORTSEXECSEG = 0x20400,
+    CS_SUPPORTSRUNTIME = 0x20500,
+    CS_SUPPORTSLINKAGE = 0x20600,
+});
+
+newtype!(
+    struct CsSlot(u32);
+);
+
+newtype_constant_names!(NAMES_CSSLOT: CsSlot(u32) = {
+    CSSLOT_CODEDIRECTORY = 0,
+    CSSLOT_INFOSLOT = 1,
+    CSSLOT_REQUIREMENTS = 2,
+    CSSLOT_RESOURCEDIR = 3,
+    CSSLOT_APPLICATION = 4,
+    CSSLOT_ENTITLEMENTS = 5,
+    CSSLOT_DER_ENTITLEMENTS = 7,
+    CSSLOT_LAUNCH_CONSTRAINT_SELF = 8,
+    CSSLOT_LAUNCH_CONSTRAINT_PARENT = 9,
+    CSSLOT_LAUNCH_CONSTRAINT_RESPONSIBLE = 10,
+    CSSLOT_LIBRARY_CONSTRAINT = 11,
+
+
+    CSSLOT_SIGNATURESLOT = 0x10000,
+    CSSLOT_IDENTIFICATIONSLOT = 0x10001,
+    CSSLOT_TICKETSLOT = 0x10002,
+});
+
+impl CsSlot {
+    pub fn is_alternate_codedirectory(self) -> bool {
+        matches!(
+            self.0,
+            CSSLOT_ALTERNATE_CODEDIRECTORIES..CSSLOT_ALTERNATE_CODEDIRECTORY_LIMIT
+        )
+    }
+}
+
+/// first alternate CodeDirectory, if any
+pub const CSSLOT_ALTERNATE_CODEDIRECTORIES: u32 = 0x1000;
+/// max number of alternate CD slots
+pub const CSSLOT_ALTERNATE_CODEDIRECTORY_MAX: u32 = 5;
+pub const CSSLOT_ALTERNATE_CODEDIRECTORY_LIMIT: u32 =
+    CSSLOT_ALTERNATE_CODEDIRECTORIES + CSSLOT_ALTERNATE_CODEDIRECTORY_MAX;
+
+newtype!(
+    #[repr(C)]
+    struct CsHashType(u8);
+);
+
+newtype_constant_names!(NAMES_CS_HASHTYPE: CsHashType(u8) = {
+    CS_HASHTYPE_SHA1              = 1,
+    CS_HASHTYPE_SHA256            = 2,
+    CS_HASHTYPE_SHA256_TRUNCATED  = 3,
+    CS_HASHTYPE_SHA384 = 4,
+});
+
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct CsCodeDirectoryV0 {
+    /// magic number (CSMAGIC_CODEDIRECTORY)
+    pub magic: U32<BigEndian>,
+    /// total length of CodeDirectory blob
+    pub length: U32<BigEndian>,
+    /// compatibility version
+    pub version: U32<BigEndian, CsVersion>,
+    /// setup and mode flags
+    pub flags: U32<BigEndian, CsFlags>,
+    /// offset of hash slot element at index zero
+    pub hash_offset: U32<BigEndian>,
+    /// offset of identifier string
+    pub ident_offset: U32<BigEndian>,
+    /// number of special hash slots
+    pub n_special_slots: U32<BigEndian>,
+    /// number of ordinary (code) hash slots
+    pub n_code_slots: U32<BigEndian>,
+    /// limit to main image signature range
+    pub code_limit: U32<BigEndian>,
+    /// size of each hash in bytes
+    pub hash_size: u8,
+    /// type of hash
+    pub hash_type: CsHashType,
+    /// platform identifier; zero if not platform binary
+    pub platform: u8,
+    /// log2(page size in bytes); 0 => infinite
+    pub page_size: u8,
+    /// unused (must be zero)
+    pub spare2: U32<BigEndian>,
+    //char end_earliest[0];
+}
+
+// Version 0x20100
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct CsCodeDirectoryV1 {
+    /// offset of optional scatter vector
+    pub scatter_offset: U32<BigEndian>,
+}
+
+// Version 0x20200
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct CsCodeDirectoryV2 {
+    /// offset of optional team identifier
+    pub team_offset: U32<BigEndian>,
+}
+
+// Version 0x20300
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct CsCodeDirectoryV3 {
+    /// unused (must be zero)
+    pub spare3: U32<BigEndian>,
+    /// limit to main image signature range, 64 bits
+    pub code_limit64: U64<BigEndian>,
+}
+
+// Version 0x20400
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct CsCodeDirectoryV4 {
+    /// offset of executable segment
+    pub exec_seg_base: U64<BigEndian>,
+    /// limit of executable segment
+    pub exec_seg_limit: U64<BigEndian>,
+    /// exec segment flags
+    pub exec_seg_flags: U64<BigEndian, CsExecSegFlags>,
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct CsBlobIndex {
+    /// type of entry
+    pub slot: U32<BigEndian, CsSlot>,
+    /// offset of entry
+    pub offset: U32<BigEndian>,
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct CsSuperBlob {
+    /// magic number
+    pub magic: U32<BigEndian>,
+    /// total length of SuperBlob
+    pub length: U32<BigEndian>,
+    /// number of index entries following
+    pub count: U32<BigEndian>,
+    // (count) entries
+    // index: [CsBlobIndex]
+    // followed by Blobs in no particular order as indicated by offsets in index
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct CsGenericBlob {
+    /// magic number
+    pub magic: U32<BigEndian>,
+    /// total length of blob
+    pub length: U32<BigEndian>,
+    // data: [u8],
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct CsScatter {
+    /// number of pages; zero for sentinel (only)
+    pub count: U32<BigEndian>,
+    /// first page number
+    pub base: U32<BigEndian>,
+    /// byte offset in target
+    pub target_offset: U64<BigEndian>,
+    /// reserved (must be zero)
+    pub spare: U64<BigEndian>,
+}
 
 unsafe_impl_pod!(FatHeader, FatArch32, FatArch64,);
 unsafe_impl_endian_pod!(
@@ -4387,6 +5502,10 @@ unsafe_impl_endian_pod!(
     BuildVersionCommand,
     BuildToolVersion,
     DyldInfoCommand,
+    DyldChainedFixupsHeader,
+    DyldChainedStartsInImage,
+    DyldChainedStartsInSegment,
+    DyldChainedStartsOffsets,
     LinkerOptionCommand,
     SymsegCommand,
     IdentCommand,
@@ -4400,4 +5519,15 @@ unsafe_impl_endian_pod!(
     Nlist32,
     Nlist64,
     Relocation,
+);
+unsafe_impl_pod!(
+    CsBlobIndex,
+    CsSuperBlob,
+    CsCodeDirectoryV0,
+    CsCodeDirectoryV1,
+    CsCodeDirectoryV2,
+    CsCodeDirectoryV3,
+    CsCodeDirectoryV4,
+    CsGenericBlob,
+    CsScatter,
 );

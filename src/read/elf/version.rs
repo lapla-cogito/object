@@ -84,7 +84,7 @@ impl<'data, Elf: FileHeader> VersionTable<'data, Elf> {
         if let Some(mut verneeds) = verneeds.clone() {
             while let Some((_, mut vernauxs)) = verneeds.next()? {
                 while let Some(vernaux) = vernauxs.next()? {
-                    let index = vernaux.vna_other.get(endian);
+                    let index = vernaux.vna_other(endian).index();
                     if max_index < index.0 {
                         max_index = index.0;
                     }
@@ -93,7 +93,7 @@ impl<'data, Elf: FileHeader> VersionTable<'data, Elf> {
         }
 
         // Indices should be sequential, but this could be up to
-        // 32k * size_of::<Version>() if max_index is bad.
+        // 64k * size_of::<Version>() if max_index is bad.
         let mut versions = vec![Version::default(); max_index as usize + 1];
 
         if let Some(mut verdefs) = verdefs {
@@ -107,7 +107,7 @@ impl<'data, Elf: FileHeader> VersionTable<'data, Elf> {
                     continue;
                 }
                 if let Some(verdaux) = verdauxs.next()? {
-                    versions[usize::from(index.0)] = Version {
+                    versions[usize::from(index)] = Version {
                         name: verdaux.name(endian, strings)?,
                         hash: verdef.vd_hash.get(endian),
                         valid: true,
@@ -119,12 +119,13 @@ impl<'data, Elf: FileHeader> VersionTable<'data, Elf> {
         if let Some(mut verneeds) = verneeds {
             while let Some((verneed, mut vernauxs)) = verneeds.next()? {
                 while let Some(vernaux) = vernauxs.next()? {
-                    let index = vernaux.vna_other.get(endian);
+                    // We currently ignore the hidden bit; no linker sets it.
+                    let index = vernaux.vna_other(endian).index();
                     if index.is_special() {
                         // TODO: return error?
                         continue;
                     }
-                    versions[usize::from(index.0)] = Version {
+                    versions[usize::from(index)] = Version {
                         name: vernaux.name(endian, strings)?,
                         hash: vernaux.vna_hash.get(endian),
                         valid: true,
@@ -159,13 +160,12 @@ impl<'data, Elf: FileHeader> VersionTable<'data, Elf> {
     ///
     /// Returns `Ok(None)` for local and global versions.
     /// Returns `Err(_)` if index is invalid.
-    pub fn version(&self, index: elf::VersymIndex) -> Result<Option<&Version<'data>>> {
-        let index = index.index();
+    pub fn version(&self, index: elf::VersionIndex) -> Result<Option<&Version<'data>>> {
         if index.is_special() {
             return Ok(None);
         }
         self.versions
-            .get(usize::from(index.0))
+            .get(usize::from(index))
             .filter(|version| version.valid)
             .read_error("Invalid ELF symbol version index")
             .map(Some)
@@ -183,7 +183,7 @@ impl<'data, Elf: FileHeader> VersionTable<'data, Elf> {
         need: Option<&Version<'_>>,
     ) -> bool {
         let version_index = self.version_index(endian, index);
-        let def = match self.version(version_index) {
+        let def = match self.version(version_index.index()) {
             Ok(def) => def,
             Err(_) => return false,
         };

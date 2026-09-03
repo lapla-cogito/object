@@ -249,6 +249,7 @@ struct MachState<'a, E: Endian> {
     cputype: CpuType,
     filetype: FileType,
     twolevel: bool,
+    segment_data: Vec<&'a [u8]>,
     linkedit_data: &'a [u8],
     symbols: Vec<Option<&'a [u8]>>,
     indirect_symbols: &'a [U32<E, macho::IndirectSymbol>],
@@ -280,6 +281,9 @@ fn print_macho<Mach: MachHeader<Endian = Endianness>>(
             let mut dysymtab_command = None;
             while let Ok(Some(command)) = commands.next() {
                 if let Ok(Some((segment, section_data))) = Mach::Segment::from_command(command) {
+                    state
+                        .segment_data
+                        .push(segment.data(endian, data).unwrap_or(&[]));
                     if segment.name() == macho::SEG_TEXT.as_bytes() {
                         state.text_segment_addr = segment.vmaddr(endian).into();
                     }
@@ -381,6 +385,12 @@ fn print_load_command<Mach: MachHeader>(
             LoadCommandVariant::Symtab(symtab) => {
                 print_symtab::<Mach>(p, endian, state.linkedit_data, symtab, state);
             }
+            LoadCommandVariant::Dysymtab(dysymtab) => {
+                print_dysymtab::<Mach>(p, endian, dysymtab);
+            }
+            LoadCommandVariant::DyldInfo(x) => {
+                print_dyld_info::<Mach>(p, endian, x, state);
+            }
             LoadCommandVariant::LinkeditData(linkedit) => {
                 print_linkedit_data::<Mach>(p, endian, linkedit, state);
             }
@@ -393,37 +403,14 @@ fn print_load_command<Mach: MachHeader>(
             LoadCommandVariant::Segment32(..)
             | LoadCommandVariant::Segment64(..)
             | LoadCommandVariant::Symtab(..)
+            | LoadCommandVariant::Dysymtab(..)
+            | LoadCommandVariant::DyldInfo(..)
             | LoadCommandVariant::LinkeditData(..) => {}
             LoadCommandVariant::Thread(x, _thread_data) => {
                 p.group("ThreadCommand", |p| {
                     p.field_consts("Cmd", x.cmd.get(endian), LoadCommandType::NAMES);
                     p.field_hex("CmdSize", x.cmdsize.get(endian));
                     // TODO: thread_data
-                });
-            }
-            LoadCommandVariant::Dysymtab(x) => {
-                p.group("DysymtabCommand", |p| {
-                    p.field_consts("Cmd", x.cmd.get(endian), LoadCommandType::NAMES);
-                    p.field_hex("CmdSize", x.cmdsize.get(endian));
-                    // TODO: dump the tables these are all pointing to
-                    p.field("IndexOfLocalSymbols", x.ilocalsym.get(endian));
-                    p.field("NumberOfLocalSymbols", x.nlocalsym.get(endian));
-                    p.field("IndexOfExternallyDefinedSymbols", x.iextdefsym.get(endian));
-                    p.field("NumberOfExternallyDefinedSymbols", x.nextdefsym.get(endian));
-                    p.field("IndexOfUndefinedSymbols", x.iundefsym.get(endian));
-                    p.field("NumberOfUndefinedSymbols", x.nundefsym.get(endian));
-                    p.field_hex("TocOffset", x.tocoff.get(endian));
-                    p.field("NumberOfTocEntries", x.ntoc.get(endian));
-                    p.field_hex("ModuleTableOffset", x.modtaboff.get(endian));
-                    p.field("NumberOfModuleTableEntries", x.nmodtab.get(endian));
-                    p.field_hex("ExternalRefSymbolOffset", x.extrefsymoff.get(endian));
-                    p.field("NumberOfExternalRefSymbols", x.nextrefsyms.get(endian));
-                    p.field_hex("IndirectSymbolOffset", x.indirectsymoff.get(endian));
-                    p.field("NumberOfIndirectSymbols", x.nindirectsyms.get(endian));
-                    p.field_hex("ExternalRelocationOffset", x.extreloff.get(endian));
-                    p.field("NumberOfExternalRelocations", x.nextrel.get(endian));
-                    p.field_hex("LocalRelocationOffset", x.locreloff.get(endian));
-                    p.field("NumberOfLocalRelocations", x.nlocrel.get(endian));
                 });
             }
             LoadCommandVariant::Dylib(x) | LoadCommandVariant::IdDylib(x) => {
@@ -616,23 +603,6 @@ fn print_load_command<Mach: MachHeader>(
                     p.field_hex("Pad", x.pad.get(endian));
                 });
             }
-            LoadCommandVariant::DyldInfo(x) => {
-                p.group("DyldInfoCommand", |p| {
-                    p.field_consts("Cmd", x.cmd.get(endian), LoadCommandType::NAMES);
-                    p.field_hex("CmdSize", x.cmdsize.get(endian));
-                    // TODO: dump the tables these are all pointing to
-                    p.field_hex("RebaseOffset", x.rebase_off.get(endian));
-                    p.field_hex("RebaseSize", x.rebase_size.get(endian));
-                    p.field_hex("BindOffset", x.bind_off.get(endian));
-                    p.field_hex("BindSize", x.bind_size.get(endian));
-                    p.field_hex("WeakBindOffset", x.weak_bind_off.get(endian));
-                    p.field_hex("WeakBindSize", x.weak_bind_size.get(endian));
-                    p.field_hex("LazyBindOffset", x.lazy_bind_off.get(endian));
-                    p.field_hex("LazyBindSize", x.lazy_bind_size.get(endian));
-                    p.field_hex("ExportOffset", x.export_off.get(endian));
-                    p.field_hex("ExportSize", x.export_size.get(endian));
-                });
-            }
             LoadCommandVariant::VersionMin(x) => {
                 p.group("VersionMinCommand", |p| {
                     p.field_consts("Cmd", x.cmd.get(endian), LoadCommandType::NAMES);
@@ -674,7 +644,7 @@ fn print_load_command<Mach: MachHeader>(
                     p.field_hex("Size", x.size.get(endian));
                 });
             }
-            LoadCommandVariant::BuildVersion(x) => {
+            LoadCommandVariant::BuildVersion(x, data) => {
                 p.group("BuildVersionCommand", |p| {
                     p.field_consts("Cmd", x.cmd.get(endian), LoadCommandType::NAMES);
                     p.field_hex("CmdSize", x.cmdsize.get(endian));
@@ -682,7 +652,14 @@ fn print_load_command<Mach: MachHeader>(
                     p.field("MinOs", x.minos.get(endian));
                     p.field("Sdk", x.sdk.get(endian));
                     p.field_hex("NumberOfTools", x.ntools.get(endian));
-                    // TODO: dump tools
+                    if let Some(tools) = x.tools(endian, data).print_err(p) {
+                        for tool in tools {
+                            p.group("BuildToolVersion", |p| {
+                                p.field_consts("Tool", tool.tool.get(endian), Tool::NAMES);
+                                p.field("Version", tool.version.get(endian));
+                            });
+                        }
+                    }
                 });
             }
             LoadCommandVariant::FilesetEntry(x) => {
@@ -812,7 +789,7 @@ fn print_section_relocations<S: Section>(
         return;
     }
     if let Some(relocations) = section.relocations(endian, data).print_err(p) {
-        let constants = macho::machine_constants(state.cputype);
+        let names = macho::machine_names(state.cputype);
         for relocation in relocations {
             if relocation.r_scattered(endian, state.cputype) {
                 let info = relocation.scattered_info(endian);
@@ -820,7 +797,7 @@ fn print_section_relocations<S: Section>(
                     p.field_hex("Address", info.r_address);
                     p.field("PcRel", if info.r_pcrel { "yes" } else { "no" });
                     p.field("Length", info.r_length);
-                    p.field_consts("Type", info.r_type, constants.reloc);
+                    p.field_consts("Type", info.r_type, names.reloc);
                     p.field_hex("Value", info.r_value);
                 });
             } else {
@@ -844,7 +821,7 @@ fn print_section_relocations<S: Section>(
                     }
                     p.field("PcRel", if info.r_pcrel { "yes" } else { "no" });
                     p.field("Length", info.r_length);
-                    p.field_consts("Type", info.r_type, constants.reloc);
+                    p.field_consts("Type", info.r_type, names.reloc);
                 });
             }
         }
@@ -869,6 +846,51 @@ fn print_symtab<Mach: MachHeader>(
         p.field_hex("StringOffset", symtab.stroff.get(endian));
         p.field_hex("StringSize", symtab.strsize.get(endian));
         print_symtab_symbols::<Mach>(p, endian, data, symtab, state);
+    });
+}
+
+fn print_dysymtab<Mach: MachHeader>(
+    p: &mut Printer<'_>,
+    endian: Mach::Endian,
+    dysymtab: &DysymtabCommand<Mach::Endian>,
+) {
+    if !p.options.macho_load_commands && !p.options.symbols {
+        return;
+    }
+    p.group("DysymtabCommand", |p| {
+        p.field_consts("Cmd", dysymtab.cmd.get(endian), LoadCommandType::NAMES);
+        p.field_hex("CmdSize", dysymtab.cmdsize.get(endian));
+        // TODO: dump the tables these are all pointing to
+        p.field("IndexOfLocalSymbols", dysymtab.ilocalsym.get(endian));
+        p.field("NumberOfLocalSymbols", dysymtab.nlocalsym.get(endian));
+        p.field(
+            "IndexOfExternallyDefinedSymbols",
+            dysymtab.iextdefsym.get(endian),
+        );
+        p.field(
+            "NumberOfExternallyDefinedSymbols",
+            dysymtab.nextdefsym.get(endian),
+        );
+        p.field("IndexOfUndefinedSymbols", dysymtab.iundefsym.get(endian));
+        p.field("NumberOfUndefinedSymbols", dysymtab.nundefsym.get(endian));
+        p.field_hex("TocOffset", dysymtab.tocoff.get(endian));
+        p.field("NumberOfTocEntries", dysymtab.ntoc.get(endian));
+        p.field_hex("ModuleTableOffset", dysymtab.modtaboff.get(endian));
+        p.field("NumberOfModuleTableEntries", dysymtab.nmodtab.get(endian));
+        p.field_hex("ExternalRefSymbolOffset", dysymtab.extrefsymoff.get(endian));
+        p.field(
+            "NumberOfExternalRefSymbols",
+            dysymtab.nextrefsyms.get(endian),
+        );
+        p.field_hex("IndirectSymbolOffset", dysymtab.indirectsymoff.get(endian));
+        p.field(
+            "NumberOfIndirectSymbols",
+            dysymtab.nindirectsyms.get(endian),
+        );
+        p.field_hex("ExternalRelocationOffset", dysymtab.extreloff.get(endian));
+        p.field("NumberOfExternalRelocations", dysymtab.nextrel.get(endian));
+        p.field_hex("LocalRelocationOffset", dysymtab.locreloff.get(endian));
+        p.field("NumberOfLocalRelocations", dysymtab.nlocrel.get(endian));
     });
 }
 
@@ -903,10 +925,13 @@ fn print_symtab_symbols<Mach: MachHeader>(
                 let n_desc = nlist.n_desc(endian);
                 if nlist.is_stab() {
                     p.field_hex("Desc", n_desc);
+                } else if nlist.is_common() {
+                    p.field_hex("Desc", n_desc);
+                    p.flag_bits(n_desc.with_common_alignment(0), SymbolDesc::NAMES_UNDEFINED);
+                    p.field("CommonAlignment", n_desc.common_alignment());
                 } else if nlist.is_undefined() {
                     if state.filetype == MH_OBJECT {
                         p.field_flags("Desc", n_desc, SymbolDesc::NAMES_UNDEFINED);
-                        // TODO: alignment for common symbols
                     } else {
                         let mut n_desc_bits = n_desc.with_reference(SymbolReference(0));
                         if state.twolevel {
@@ -938,7 +963,14 @@ fn print_linkedit_data<Mach: MachHeader>(
     let cmd = linkedit.cmd.get(endian);
     let function_starts = p.options.macho_function_starts && cmd == LC_FUNCTION_STARTS;
     let exports_trie = p.options.macho_exports_trie && cmd == LC_DYLD_EXPORTS_TRIE;
-    if !p.options.macho_load_commands && !function_starts && !exports_trie {
+    let chained_fixups = p.options.macho_fixups && cmd == LC_DYLD_CHAINED_FIXUPS;
+    let code_signature = p.options.macho_code_signature && cmd == LC_CODE_SIGNATURE;
+    if !p.options.macho_load_commands
+        && !function_starts
+        && !exports_trie
+        && !chained_fixups
+        && !code_signature
+    {
         return;
     }
     p.group("LinkeditDataCommand", |p| {
@@ -950,7 +982,13 @@ fn print_linkedit_data<Mach: MachHeader>(
             print_function_starts::<Mach>(p, endian, linkedit, state);
         }
         if exports_trie {
-            print_exports_trie::<Mach>(p, endian, linkedit, state);
+            print_exports_trie(p, linkedit.exports_trie(endian, state.linkedit_data));
+        }
+        if chained_fixups {
+            print_chained_fixups::<Mach>(p, endian, linkedit, state);
+        }
+        if code_signature {
+            print_code_signature::<Mach>(p, endian, linkedit, state);
         }
     });
 }
@@ -974,44 +1012,485 @@ fn print_function_starts<Mach: MachHeader>(
     });
 }
 
-fn print_exports_trie<Mach: MachHeader>(
+fn print_exports_trie(
+    p: &mut Printer<'_>,
+    exports_trie: object::read::Result<ExportsTrieIterator<'_>>,
+) {
+    let Some(mut exports_trie) = exports_trie.print_err(p) else {
+        return;
+    };
+    while let Some(Some(export_symbol)) = exports_trie.next().print_err(p) {
+        p.group("ExportSymbol", |p| {
+            p.field_inline_string("Name", export_symbol.name());
+            p.field_flags("Flags", export_symbol.flags(), ExportSymbolFlags::NAMES);
+            match export_symbol.data() {
+                ExportData::Regular { address } => p.field_hex("Address", address),
+                ExportData::Reexport {
+                    dylib_ordinal,
+                    import_name,
+                } => {
+                    p.field_hex("DylibOrdinal", dylib_ordinal);
+                    p.field_inline_string("ImportName", import_name);
+                }
+                ExportData::StubAndResolver {
+                    stub_address,
+                    resolver_address,
+                } => {
+                    p.field_hex("StubAddress", stub_address);
+                    p.field_hex("ResolverAddress", resolver_address);
+                }
+            }
+        });
+    }
+}
+
+fn print_dyld_info<Mach: MachHeader>(
+    p: &mut Printer<'_>,
+    endian: Mach::Endian,
+    x: &DyldInfoCommand<Mach::Endian>,
+    state: &MachState<Mach::Endian>,
+) {
+    if !p.options.macho_load_commands
+        && !p.options.macho_fixups
+        && !p.options.macho_fixup_opcodes
+        && !p.options.macho_exports_trie
+    {
+        return;
+    }
+    p.group("DyldInfoCommand", |p| {
+        p.field_consts("Cmd", x.cmd.get(endian), LoadCommandType::NAMES);
+        p.field_hex("CmdSize", x.cmdsize.get(endian));
+        p.field_hex("RebaseOffset", x.rebase_off.get(endian));
+        p.field_hex("RebaseSize", x.rebase_size.get(endian));
+        p.field_hex("BindOffset", x.bind_off.get(endian));
+        p.field_hex("BindSize", x.bind_size.get(endian));
+        p.field_hex("WeakBindOffset", x.weak_bind_off.get(endian));
+        p.field_hex("WeakBindSize", x.weak_bind_size.get(endian));
+        p.field_hex("LazyBindOffset", x.lazy_bind_off.get(endian));
+        p.field_hex("LazyBindSize", x.lazy_bind_size.get(endian));
+        p.field_hex("ExportOffset", x.export_off.get(endian));
+        p.field_hex("ExportSize", x.export_size.get(endian));
+
+        let pointer_size = Mach::pointer_size();
+        if x.rebase_size.get(endian) != 0 {
+            if p.options.macho_fixup_opcodes {
+                p.group("RebaseOperations", |p| {
+                    print_rebase_operations(p, x.rebase_operations(endian, state.linkedit_data));
+                });
+            }
+            if p.options.macho_fixups {
+                p.group("Rebases", |p| {
+                    print_rebases(p, x.rebases(endian, state.linkedit_data, pointer_size));
+                });
+            }
+        }
+        if x.bind_size.get(endian) != 0 {
+            if p.options.macho_fixup_opcodes {
+                p.group("BindOperations", |p| {
+                    print_bind_operations(p, x.bind_operations(endian, state.linkedit_data));
+                });
+            }
+            if p.options.macho_fixups {
+                p.group("Binds", |p| {
+                    print_binds(p, x.binds(endian, state.linkedit_data, pointer_size));
+                });
+            }
+        }
+        if x.weak_bind_size.get(endian) != 0 {
+            if p.options.macho_fixup_opcodes {
+                p.group("WeakBindOperations", |p| {
+                    print_bind_operations(p, x.weak_bind_operations(endian, state.linkedit_data));
+                });
+            }
+            if p.options.macho_fixups {
+                p.group("WeakBinds", |p| {
+                    print_binds(p, x.weak_binds(endian, state.linkedit_data, pointer_size));
+                });
+            }
+        }
+        if x.lazy_bind_size.get(endian) != 0 {
+            if p.options.macho_fixup_opcodes {
+                p.group("LazyBindOperations", |p| {
+                    print_bind_operations(p, x.lazy_bind_operations(endian, state.linkedit_data));
+                });
+            }
+            if p.options.macho_fixups {
+                p.group("LazyBinds", |p| {
+                    print_binds(p, x.lazy_binds(endian, state.linkedit_data, pointer_size));
+                });
+            }
+        }
+        if x.export_size.get(endian) != 0 && p.options.macho_exports_trie {
+            p.group("ExportsTrie", |p| {
+                print_exports_trie(p, x.exports_trie(endian, state.linkedit_data));
+            });
+        }
+    });
+}
+
+fn print_rebase_operations(
+    p: &mut Printer<'_>,
+    operations: object::read::Result<RebaseOperationIterator<'_>>,
+) {
+    let Some(mut operations) = operations.print_err(p) else {
+        return;
+    };
+    while let Some(Some((opcode, operation))) = operations.next().print_err(p) {
+        p.group("Operation", |p| {
+            p.field_consts("Opcode", opcode, RebaseOpcode::NAMES);
+            match operation {
+                RebaseOperation::Done => {}
+                RebaseOperation::SetType { kind } => {
+                    p.field_consts("Type", kind, RebaseType::NAMES);
+                }
+                RebaseOperation::SetSegmentAndOffset {
+                    index: segment_index,
+                    offset,
+                } => {
+                    p.field("SegmentIndex", segment_index);
+                    p.field_hex("Offset", offset);
+                }
+                RebaseOperation::AddAddr { offset } => {
+                    p.field_hex("Offset", offset);
+                }
+                RebaseOperation::AddAddrScaled { count } => {
+                    p.field("Count", count);
+                }
+                RebaseOperation::DoRebaseTimes { count } => {
+                    p.field("Count", count);
+                }
+                RebaseOperation::DoRebaseAddAddr { offset } => {
+                    p.field_hex("Offset", offset);
+                }
+                RebaseOperation::DoRebaseTimesSkipping { count, skip } => {
+                    p.field("Count", count);
+                    p.field_hex("Skip", skip);
+                }
+            }
+        });
+    }
+}
+
+fn print_bind_operations(
+    p: &mut Printer<'_>,
+    operations: object::read::Result<BindOperationIterator<'_>>,
+) {
+    let Some(mut operations) = operations.print_err(p) else {
+        return;
+    };
+    while let Some(Some((opcode, operation))) = operations.next().print_err(p) {
+        p.group("Operation", |p| {
+            p.field_consts("Opcode", opcode, BindOpcode::NAMES);
+            match operation {
+                BindOperation::Done => {}
+                BindOperation::SetDylibOrdinal { ordinal } => {
+                    p.field("Ordinal", ordinal);
+                }
+                BindOperation::SetDylibSpecial { ordinal } => {
+                    p.field_consts_display("Ordinal", ordinal, BindDylib::NAMES);
+                }
+                BindOperation::SetSymbol { flags, name } => {
+                    p.field_flags("Flags", flags, BindSymbolFlags::NAMES);
+                    p.field_inline_string("Name", name);
+                }
+                BindOperation::SetType { kind } => {
+                    p.field_consts("Type", kind, BindType::NAMES);
+                }
+                BindOperation::SetAddend { addend } => {
+                    p.field("Addend", addend);
+                }
+                BindOperation::SetSegmentAndOffset {
+                    segment_index,
+                    offset,
+                } => {
+                    p.field("SegmentIndex", segment_index);
+                    p.field_hex("Offset", offset);
+                }
+                BindOperation::AddAddr { offset } => {
+                    p.field_hex("Offset", offset);
+                }
+                BindOperation::DoBind => {}
+                BindOperation::DoBindAddAddr { offset } => {
+                    p.field_hex("Offset", offset);
+                }
+                BindOperation::DoBindAddAddrScaled { count } => {
+                    p.field("Count", count);
+                }
+                BindOperation::DoBindTimesSkipping { count, skip } => {
+                    p.field("Count", count);
+                    p.field_hex("Skip", skip);
+                }
+            }
+        });
+    }
+}
+
+fn print_rebases(p: &mut Printer<'_>, rebases: object::read::Result<RebaseIterator<'_>>) {
+    let Some(mut rebases) = rebases.print_err(p) else {
+        return;
+    };
+    while let Some(Some(rebase)) = rebases.next().print_err(p) {
+        p.group("Rebase", |p| {
+            p.field("SegmentIndex", rebase.segment_index);
+            p.field_hex("SegmentOffset", rebase.segment_offset);
+            p.field_consts("Type", rebase.kind, RebaseType::NAMES);
+        });
+    }
+}
+
+fn print_binds(p: &mut Printer<'_>, binds: object::read::Result<BindIterator<'_>>) {
+    let Some(mut binds) = binds.print_err(p) else {
+        return;
+    };
+    while let Some(Some(bind)) = binds.next().print_err(p) {
+        p.group("Bind", |p| {
+            p.field("SegmentIndex", bind.segment_index);
+            p.field_hex("SegmentOffset", bind.segment_offset);
+            p.field_consts("Type", bind.kind, BindType::NAMES);
+            p.field_consts_display("LibraryOrdinal", bind.dylib, BindDylib::NAMES);
+            p.field_flags("Flags", bind.flags, BindSymbolFlags::NAMES);
+            p.field_inline_string("Symbol", bind.symbol);
+            p.field("Addend", bind.addend);
+        });
+    }
+}
+
+fn print_chained_fixups<Mach: MachHeader>(
     p: &mut Printer<'_>,
     endian: Mach::Endian,
     linkedit: &LinkeditDataCommand<Mach::Endian>,
     state: &MachState<Mach::Endian>,
 ) {
-    if let Some(mut exports_trie) = linkedit
-        .exports_trie(endian, state.linkedit_data)
+    let Some(fixups) = linkedit
+        .chained_fixups(endian, state.linkedit_data)
         .print_err(p)
-    {
-        while let Some(Some(export_symbol)) = exports_trie.next().print_err(p) {
-            p.group("ExportSymbol", |p| {
-                p.field_inline_string("Name", export_symbol.name());
-                p.field_flags("Flags", export_symbol.flags(), ExportSymbolFlags::NAMES);
-                match export_symbol.data() {
-                    ExportData::Regular { address } => p.field_hex("Address", address),
-                    ExportData::Reexport {
-                        dylib_ordinal,
-                        import_name,
-                    } => {
-                        p.field_hex("DylibOrdinal", dylib_ordinal);
-                        p.field_inline_string("ImportName", import_name);
-                    }
-                    ExportData::StubAndResolver {
-                        stub_address,
-                        resolver_address,
-                    } => {
-                        p.field_hex("StubAddress", stub_address);
-                        p.field_hex("ResolverAddress", resolver_address);
-                    }
-                }
-            });
+    else {
+        return;
+    };
+    p.group("DyldChainedFixups", |p| {
+        let header = fixups.header();
+        p.field("FixupsVersion", header.fixups_version.get(endian));
+        p.field_hex("StartsOffset", header.starts_offset.get(endian));
+        p.field_hex("ImportsOffset", header.imports_offset.get(endian));
+        p.field_hex("SymbolsOffset", header.symbols_offset.get(endian));
+        p.field("ImportsCount", header.imports_count.get(endian));
+        p.field_consts(
+            "ImportsFormat",
+            header.imports_format.get(endian),
+            DyldChainedImportFormat::NAMES,
+        );
+        p.field("SymbolsFormat", header.symbols_format.get(endian));
+
+        let mut import_names = Vec::new();
+        if header.imports_count.get(endian) != 0
+            && let Some(mut imports) = fixups.imports(endian).print_err(p)
+        {
+            while let Some(Some(import)) = imports.next().print_err(p) {
+                p.group("Import", |p| {
+                    p.field_consts_display("LibraryOrdinal", import.dylib, BindDylib::NAMES);
+                    p.field("WeakImport", import.weak_import);
+                    p.field("Addend", import.addend);
+                    p.field_inline_string("Name", import.name);
+                });
+                import_names.push(import.name);
+            }
         }
+
+        if let Some(mut segments) = fixups.segments(endian).print_err(p) {
+            while let Some(Some(segment)) = segments.next().print_err(p) {
+                print_chained_fixups_in_segment::<Mach>(p, endian, &segment, state, &import_names);
+            }
+        }
+    });
+}
+
+fn print_chained_fixups_in_segment<Mach: MachHeader>(
+    p: &mut Printer<'_>,
+    endian: Mach::Endian,
+    segment: &DyldChainedSegment<Mach::Endian>,
+    state: &MachState<Mach::Endian>,
+    import_names: &[&[u8]],
+) {
+    p.group("Segment", |p| {
+        let header = segment.header();
+        p.field("SegmentIndex", segment.index());
+        p.field_hex("Size", header.size.get(endian));
+        p.field_hex("PageSize", header.page_size.get(endian));
+        p.field_consts(
+            "PointerFormat",
+            header.pointer_format.get(endian),
+            DyldChainedPtrFormat::NAMES,
+        );
+        p.field_hex("SegmentOffset", header.segment_offset.get(endian));
+        p.field_hex("MaxValidPointer", header.max_valid_pointer.get(endian));
+        p.field("PageCount", header.page_count.get(endian));
+
+        let segment_index = segment.index() as usize;
+        let Some(segment_data) = state.segment_data.get(segment_index) else {
+            return;
+        };
+        let mut fixups = segment.fixups(endian, state.text_segment_addr, segment_data);
+        while let Some(Some((offset, fixup))) = fixups.next().print_err(p) {
+            print_chained_fixup(p, offset, fixup, import_names);
+        }
+    });
+}
+
+fn print_chained_fixup(p: &mut Printer<'_>, offset: u64, fixup: Fixup, import_names: &[&[u8]]) {
+    match fixup {
+        Fixup::Rebase(fixup) => p.group("Rebase", |p| {
+            p.field_hex("Offset", offset);
+            p.field_hex("TargetOffset", fixup.target_offset);
+            print_fixup_auth(p, fixup.auth);
+        }),
+        Fixup::Bind(fixup) => p.group("Bind", |p| {
+            p.field_hex("Offset", offset);
+            p.field_string_option(
+                "Ordinal",
+                fixup.ordinal,
+                import_names.get(fixup.ordinal as usize).copied(),
+            );
+            if fixup.addend != 0 {
+                p.field_hex("Addend", fixup.addend);
+            }
+            print_fixup_auth(p, fixup.auth);
+        }),
+        Fixup::KernelCacheRebase(fixup) => p.group("Rebase", |p| {
+            p.field_hex("Offset", offset);
+            p.field_hex("TargetOffset", fixup.target_offset);
+            p.field_hex("CacheLevel", fixup.cache_level);
+            print_fixup_auth(p, fixup.auth);
+        }),
+        Fixup::SegmentedRebase(fixup) => p.group("Rebase", |p| {
+            p.field_hex("Offset", offset);
+            // TODO: segment name
+            p.field_hex("TargetSegmentIndex", fixup.target_segment_index);
+            p.field_hex("TargetSegmentOffset", fixup.target_segment_offset);
+            print_fixup_auth(p, fixup.auth);
+        }),
     }
 }
 
+fn print_fixup_auth(p: &mut Printer<'_>, auth: Option<FixupAuth>) {
+    if let Some(auth) = auth {
+        p.field(
+            "Key",
+            match auth.key {
+                PtrauthKey::IA => "IA",
+                PtrauthKey::IB => "IB",
+                PtrauthKey::DA => "DA",
+                PtrauthKey::DB => "DB",
+            },
+        );
+        p.field("AddrDiv", auth.addr_div);
+        p.field_hex("Diversity", auth.diversity);
+    }
+}
+
+fn print_code_signature<Mach: MachHeader>(
+    p: &mut Printer<'_>,
+    endian: Mach::Endian,
+    linkedit: &LinkeditDataCommand<Mach::Endian>,
+    state: &MachState<Mach::Endian>,
+) {
+    let Some(signature) = linkedit
+        .code_signature(endian, state.linkedit_data)
+        .print_err(p)
+    else {
+        return;
+    };
+    p.group("CodeSignature", |p| {
+        let super_blob = signature.header();
+        p.field_hex("Magic", super_blob.magic.get(BigEndian));
+        p.field_hex("Length", super_blob.length.get(BigEndian));
+        p.field("Count", super_blob.count.get(BigEndian));
+        let mut blobs = signature.blobs();
+        while let Some(Some(blob)) = blobs.next().print_err(p) {
+            p.group("Blob", |p| {
+                print_cs_slot(p, blob.slot());
+                p.field_hex("Offset", blob.offset());
+                p.field_hex("Magic", blob.magic());
+                p.field_hex("Length", blob.data().len());
+                if let Some(code_directory) = blob.code_directory().print_err(p).flatten() {
+                    print_code_directory(p, &code_directory);
+                }
+            });
+        }
+    });
+}
+
+fn print_cs_slot(p: &mut Printer<'_>, slot: CsSlot) {
+    if slot.is_alternate_codedirectory() {
+        p.field_name("Slot");
+        writeln!(
+            p.w,
+            "CSSLOT_ALTERNATE_CODEDIRECTORIES + {} (0x{:X})",
+            slot.0 - CSSLOT_ALTERNATE_CODEDIRECTORIES,
+            slot.0
+        )
+        .unwrap();
+    } else {
+        p.field_consts("Slot", slot, CsSlot::NAMES);
+    }
+}
+
+fn print_code_directory(p: &mut Printer<'_>, code_directory: &CodeDirectory<'_>) {
+    p.group("CodeDirectory", |p| {
+        let header = code_directory.header();
+        p.field_consts("Version", header.version.get(BigEndian), CsVersion::NAMES);
+        p.field_flags("Flags", header.flags.get(BigEndian), CsFlags::NAMES);
+        p.field_hex("HashOffset", header.hash_offset.get(BigEndian));
+        p.field_string(
+            "IdentOffset",
+            header.ident_offset.get(BigEndian),
+            code_directory.ident(),
+        );
+        p.field("NSpecialSlots", header.n_special_slots.get(BigEndian));
+        p.field("NCodeSlots", header.n_code_slots.get(BigEndian));
+        p.field_hex("CodeLimit", header.code_limit.get(BigEndian));
+        p.field("HashSize", header.hash_size);
+        p.field_consts("HashType", header.hash_type, CsHashType::NAMES);
+        p.field("Platform", header.platform);
+        p.field("PageSize", header.page_size);
+        if let Some(scatter_offset) = code_directory.scatter_offset() {
+            p.field_hex("ScatterOffset", scatter_offset);
+        }
+        if let Some(team_offset) = code_directory.team_offset() {
+            let team_id = code_directory.team_id().print_err(p).flatten();
+            p.field_string_option("TeamOffset", team_offset, team_id);
+        }
+        if let Some(code_limit64) = code_directory.code_limit64() {
+            p.field_hex("CodeLimit64", code_limit64);
+        }
+        if let Some(exec_seg) = code_directory.exec_seg() {
+            p.field_hex("ExecSegBase", exec_seg.exec_seg_base.get(BigEndian));
+            p.field_hex("ExecSegLimit", exec_seg.exec_seg_limit.get(BigEndian));
+            p.field_flags(
+                "ExecSegFlags",
+                exec_seg.exec_seg_flags.get(BigEndian),
+                CsExecSegFlags::NAMES,
+            );
+        }
+        for slot in (1..=header.n_special_slots.get(BigEndian)).map(CsSlot) {
+            let Some(hash) = code_directory.special_hash(slot).print_err(p) else {
+                break;
+            };
+            p.group("SpecialSlot", |p| {
+                p.field_consts("Slot", slot, CsSlot::NAMES);
+                p.field_hash("Hash", hash);
+            });
+        }
+        for code_page in 0..header.n_code_slots.get(BigEndian) {
+            let Some(hash) = code_directory.code_hash(code_page).print_err(p) else {
+                break;
+            };
+            p.field_hash("CodeHash", hash);
+        }
+    });
+}
+
 fn print_cputype(p: &mut Printer<'_>, cputype: CpuType, cpusubtype: CpuSubtype) {
-    let constants = macho::machine_constants(cputype);
+    let names = macho::machine_names(cputype);
     p.field_consts("CpuType", cputype, macho::CpuType::NAMES);
-    p.field_flags("CpuSubtype", cpusubtype, constants.cpusubtype);
+    p.field_flags("CpuSubtype", cpusubtype, names.cpusubtype);
 }

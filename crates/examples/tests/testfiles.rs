@@ -1,7 +1,5 @@
 #![cfg(all(feature = "read", feature = "names"))]
 
-#[cfg(feature = "write")]
-use object_examples::objcopy;
 use object_examples::{objdump, readobj};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -135,7 +133,29 @@ fn testfiles() {
                 #[cfg(feature = "write")]
                 {
                     fail |= testfile(&in_path, &out_path, err_path, |out, err, in_data| {
-                        let copy_data = objcopy::copy(in_data);
+                        let copy_data = object_examples::objcopy::copy(in_data);
+                        readobj::print(out, err, &copy_data, &[], &readobj::PrintOptions::all());
+                    });
+                }
+            } else if extension == "elfstub" {
+                #[cfg(feature = "write")]
+                {
+                    fail |= testfile(&in_path, &out_path, err_path, |out, err, in_data| {
+                        let copy_data = object_examples::elfstub(in_data).unwrap();
+                        readobj::print(out, err, &copy_data, &[], &readobj::PrintOptions::all());
+                    });
+                }
+            } else if extension == "copy" {
+                #[cfg(feature = "write")]
+                {
+                    fail |= testfile(&in_path, &out_path, err_path, |out, err, in_data| {
+                        let copy_data = match object::FileKind::parse(in_data).unwrap() {
+                            object::FileKind::Elf32 => object_examples::elfcopy32(in_data).unwrap(),
+                            object::FileKind::Elf64 => object_examples::elfcopy64(in_data).unwrap(),
+                            kind => {
+                                panic!("unsupported copy file format: {kind:?}")
+                            }
+                        };
                         readobj::print(out, err, &copy_data, &[], &readobj::PrintOptions::all());
                     });
                 }

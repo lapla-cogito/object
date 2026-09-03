@@ -346,6 +346,13 @@ impl From<SectionType> for SectionFlags {
     }
 }
 
+impl core::ops::BitOr<SectionFlags> for SectionType {
+    type Output = SectionFlags;
+    fn bitor(self, subtype: SectionFlags) -> SectionFlags {
+        subtype.with_type(self)
+    }
+}
+
 newtype!(
     /// Values for the type field of `SectionHeader*::s_flags`.
     ///
@@ -498,7 +505,8 @@ newtype!(
     struct SymbolType(u16);
 );
 
-newtype_flag_names!(NAMES_SYM_T: SymbolType(u16) = {});
+// Names depend on storage class.
+newtype_flag_names!(SymbolType(u16) = {});
 
 flag_names!(NAMES_SYM_T_EXT: SymbolType(u16) = {
     _ = SYM_V_MASK => NAMES_SYM_V,
@@ -1033,7 +1041,7 @@ pub struct Rel32 {
     /// Relocation size and information.
     pub r_rsize: u8,
     /// Relocation type.
-    pub r_rtype: u8,
+    pub r_rtype: RelocationType,
 }
 
 /// Relocation table entry
@@ -1047,14 +1055,15 @@ pub struct Rel64 {
     /// Relocation size and information.
     pub r_rsize: u8,
     /// Relocation type.
-    pub r_rtype: u8,
+    pub r_rtype: RelocationType,
 }
 
-/// Values for `Rel*::r_rtype`.
-#[cfg(feature = "names")]
-pub const NAMES_REL_TYPE: &ConstantNames<u8> = &NAMES_R;
+newtype!(
+    /// Values for `Rel*::r_rtype`.
+    struct RelocationType(u8);
+);
 
-constant_names!(NAMES_R: u8 = {
+newtype_constant_names!(NAMES_REL_TYPE: RelocationType(u8) = {
     /// Positive relocation.
     R_POS = 0x00,
     /// Positive indirect load relocation.

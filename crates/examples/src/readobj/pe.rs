@@ -1,7 +1,6 @@
 use super::*;
 use object::LittleEndian as LE;
 use object::pe::*;
-use object::read::coff::ImageSymbol as _;
 use object::read::coff::*;
 use object::read::pe::*;
 use object::{Bytes, U32, U64};
@@ -244,7 +243,7 @@ fn print_data_directories(p: &mut Printer<'_>, data_directories: &DataDirectorie
     }
     for (index, dir) in data_directories.iter().enumerate() {
         p.group("ImageDataDirectory", |p| {
-            p.field_consts("Index", index, NAMES_DIRECTORY_ENTRY);
+            p.field_consts("Index", index, &NAMES_DIRECTORY_ENTRY);
             p.field_hex("VirtualAddress", dir.virtual_address.get(LE));
             p.field_hex("Size", dir.size.get(LE));
         });
@@ -325,28 +324,24 @@ fn print_export_dir(
         {
             // TODO: the order of the name pointers might be interesting?
             let mut names = vec![None; export_table.addresses().len()];
-            for (name_pointer, ordinal) in export_table.name_iter() {
-                if let Some(name) = names.get_mut(ordinal as usize) {
+            for (name_pointer, index) in export_table.name_iter() {
+                if let Some(name) = names.get_mut(index.0 as usize) {
                     *name = Some(name_pointer);
                 }
             }
 
-            let ordinal_base = export_table.ordinal_base();
-            for (ordinal, address) in export_table.addresses().iter().enumerate() {
+            for (index, ordinal, address) in export_table.address_iter() {
                 p.group("Export", |p| {
-                    p.field("Ordinal", ordinal_base.wrapping_add(ordinal as u32));
-                    if let Some(name_pointer) = names[ordinal] {
+                    p.field("Ordinal", ordinal);
+                    if let Some(name_pointer) = names[index.0 as usize] {
                         p.field_string(
                             "Name",
                             name_pointer,
                             export_table.name_from_pointer(name_pointer),
                         );
                     }
-                    p.field_hex("Address", address.get(LE));
-                    if let Some(target) = export_table
-                        .target_from_address(address.get(LE))
-                        .print_err(p)
-                    {
+                    p.field_hex("Address", address);
+                    if let Some(target) = export_table.target_from_address(address).print_err(p) {
                         match target {
                             ExportTarget::Address(_) => {}
                             ExportTarget::ForwardByOrdinal(library, ordinal) => {
@@ -359,7 +354,7 @@ fn print_export_dir(
                             }
                         }
                     } else if let Some(Some(forward)) =
-                        export_table.forward_string(address.get(LE)).print_err(p)
+                        export_table.forward_string(address).print_err(p)
                     {
                         p.field_inline_string("Forward", forward);
                     }
@@ -642,7 +637,7 @@ fn print_relocations<'data, Coff: CoffHeader>(
         return;
     }
     if let Some(relocations) = section.coff_relocations(data).print_err(p) {
-        let constants = pe::machine_constants(machine);
+        let names = pe::machine_names(machine);
         for relocation in relocations {
             p.group("ImageRelocation", |p| {
                 p.field_hex("VirtualAddress", relocation.virtual_address.get(LE));
@@ -655,7 +650,7 @@ fn print_relocations<'data, Coff: CoffHeader>(
                 });
                 p.field_string_option("Symbol", index.0, name);
                 let typ = relocation.typ.get(LE);
-                p.field_flags("Type", typ, constants.rel);
+                p.field_flags("Type", typ, names.rel);
             });
         }
     }
@@ -769,7 +764,7 @@ fn print_reloc_dir(
     if !p.options.pe_base_relocs {
         return Some(());
     }
-    let constants = pe::machine_constants(machine);
+    let names = pe::machine_names(machine);
     let mut blocks = data_directories
         .relocation_blocks(data, sections)
         .print_err(p)??;
@@ -779,7 +774,7 @@ fn print_reloc_dir(
         for reloc in block {
             p.group("ImageBaseRelocation", |p| {
                 p.field_hex("VirtualAddress", reloc.virtual_address);
-                p.field_consts("Type", reloc.typ, constants.rel_based);
+                p.field_consts("Type", reloc.typ, names.rel_based);
                 let offset = (reloc.virtual_address - block_address) as usize;
                 if let Some(addend) = match reloc.typ {
                     IMAGE_REL_BASED_HIGHLOW => block_data

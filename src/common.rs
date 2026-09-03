@@ -23,6 +23,7 @@ pub enum Architecture {
     X86_64_X32,
     Hexagon,
     Hppa,
+    Ia64,
     LoongArch32,
     LoongArch64,
     M68k,
@@ -77,6 +78,7 @@ impl Architecture {
             Architecture::X86_64_X32 => Some(AddressSize::U32),
             Architecture::Hexagon => Some(AddressSize::U32),
             Architecture::Hppa => Some(AddressSize::U32),
+            Architecture::Ia64 => Some(AddressSize::U64),
             Architecture::LoongArch32 => Some(AddressSize::U32),
             Architecture::LoongArch64 => Some(AddressSize::U64),
             Architecture::M68k => Some(AddressSize::U32),
@@ -135,6 +137,7 @@ pub enum BinaryFormat {
     Pe,
     Wasm,
     Xcoff,
+    Goff,
 }
 
 impl BinaryFormat {
@@ -174,7 +177,7 @@ pub enum SectionKind {
     ///
     /// Example ELF sections: `.rodata`
     ///
-    /// Example Mach-O sections: `__TEXT/__const`, `__DATA/__const`, `__TEXT/__literal4`
+    /// Example Mach-O sections: `__TEXT/__const`, `__TEXT/__literal4`
     ReadOnlyData,
     /// A read only data section with relocations.
     ///
@@ -191,12 +194,8 @@ pub enum SectionKind {
     ///
     /// Example ELF sections: `.bss`
     ///
-    /// Example Mach-O sections: `__DATA/__bss`
+    /// Example Mach-O sections: `__DATA/__bss`, `__DATA/__common`
     UninitializedData,
-    /// An uninitialized common data section.
-    ///
-    /// Example Mach-O sections: `__DATA/__common`
-    Common,
     /// A TLS data section.
     ///
     /// Example ELF sections: `.tdata`
@@ -247,9 +246,7 @@ pub enum SectionKind {
 impl SectionKind {
     /// Return true if this section contains zerofill data.
     pub fn is_bss(self) -> bool {
-        self == SectionKind::UninitializedData
-            || self == SectionKind::UninitializedTls
-            || self == SectionKind::Common
+        self == SectionKind::UninitializedData || self == SectionKind::UninitializedTls
     }
 }
 
@@ -503,6 +500,16 @@ pub enum FileFlags {
         /// `f_flags` field in the XCOFF file header.
         f_flags: crate::xcoff::FileFlags,
     },
+    /// GOFF file flags.
+    #[cfg(feature = "goff")]
+    Goff {
+        /// `archlvl` field in the GOFF file header.
+        archlvl: u32,
+        /// `flags` field in the GOFF END record.
+        flags: Option<crate::goff::FileFlags>,
+        /// `amode` field in the GOFF END record.
+        amode: Option<u8>,
+    },
 }
 
 /// Segment flags that are specific to each file format.
@@ -625,6 +632,10 @@ pub enum SectionFlags {
     MachO {
         /// `flags` field in the section header.
         flags: crate::macho::SectionFlags,
+        /// `reserved2` field in the section header.
+        ///
+        /// This is the size of a stub in a section with type `S_SYMBOL_STUBS`.
+        reserved2: u32,
     },
     /// COFF section flags.
     #[cfg(feature = "coff")]
@@ -645,6 +656,12 @@ pub enum SectionFlags {
         ///
         /// See <https://github.com/WebAssembly/tool-conventions/blob/main/Linking.md>.
         flags: u32,
+    },
+    /// GOFF section flags.
+    #[cfg(feature = "goff")]
+    Goff {
+        /// Section flags containing the record type.
+        flags: crate::goff::SectionFlags,
     },
 }
 
@@ -710,6 +727,18 @@ pub enum SymbolFlags<Section, Symbol> {
         /// Only valid if `x_smtyp` is `XTY_LD`.
         containing_csect: Option<Symbol>,
     },
+    /// GOFF symbol flags.
+    #[cfg(feature = "goff")]
+    Goff {
+        /// `symbol_type` field in the GOFF ESD record.
+        symboltype: crate::goff::SymbolType,
+        /// `sym_flags` field in the GOFF ESD record.
+        symflags: u8,
+        /// `namespace_id` field in the GOFF ESD record.
+        namespaceid: u8,
+        /// `behavioral_attributes` field in the GOFF ESD record.
+        behavioral_attributes: [u8; 10],
+    },
     #[doc(hidden)]
     #[cfg(not(all(feature = "coff", feature = "xcoff")))]
     _Phantom(core::marker::PhantomData<(Section, Symbol)>),
@@ -746,13 +775,13 @@ pub enum RelocationFlags {
     #[cfg(feature = "elf")]
     Elf {
         /// `r_type` field in the ELF relocation.
-        r_type: u32,
+        r_type: crate::elf::RelocationType,
     },
     /// Mach-O relocation fields.
     #[cfg(feature = "macho")]
     MachO {
         /// `r_type` field in the Mach-O relocation.
-        r_type: u8,
+        r_type: crate::macho::RelocationType,
         /// `r_pcrel` field in the Mach-O relocation.
         r_pcrel: bool,
         /// `r_length` field in the Mach-O relocation.
@@ -762,13 +791,13 @@ pub enum RelocationFlags {
     #[cfg(feature = "coff")]
     Coff {
         /// `typ` field in the COFF relocation.
-        typ: u16,
+        typ: crate::pe::RelocationType,
     },
     /// XCOFF relocation fields.
     #[cfg(feature = "xcoff")]
     Xcoff {
         /// `r_rtype` field in the XCOFF relocation.
-        r_rtype: u8,
+        r_rtype: crate::xcoff::RelocationType,
         /// `r_rsize` field in the XCOFF relocation.
         r_rsize: u8,
     },
@@ -777,6 +806,12 @@ pub enum RelocationFlags {
     Wasm {
         /// Relocation type (the `R_WASM_*` constant).
         r_type: u8,
+    },
+    /// GOFF relocation fields.
+    #[cfg(feature = "goff")]
+    Goff {
+        /// The 6-byte GOFF relocation flags structure
+        flags: crate::read::goff::RelocationFlags,
     },
 }
 

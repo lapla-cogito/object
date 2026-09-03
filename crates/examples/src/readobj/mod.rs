@@ -26,6 +26,9 @@ pub struct PrintOptions {
     pub macho_load_commands: bool,
     pub macho_function_starts: bool,
     pub macho_exports_trie: bool,
+    pub macho_fixups: bool,
+    pub macho_fixup_opcodes: bool,
+    pub macho_code_signature: bool,
 
     // PE specific selectors
     pub pe_rich: bool,
@@ -57,6 +60,9 @@ impl PrintOptions {
             macho_load_commands: true,
             macho_function_starts: true,
             macho_exports_trie: true,
+            macho_fixups: true,
+            macho_fixup_opcodes: true,
+            macho_code_signature: true,
             pe_rich: true,
             pe_base_relocs: true,
             pe_imports: true,
@@ -83,6 +89,9 @@ impl PrintOptions {
             macho_load_commands: false,
             macho_function_starts: false,
             macho_exports_trie: false,
+            macho_fixups: false,
+            macho_fixup_opcodes: false,
+            macho_code_signature: false,
             pe_rich: false,
             pe_base_relocs: false,
             pe_imports: false,
@@ -178,6 +187,14 @@ impl<'a> Printer<'a> {
     fn field_bytes(&mut self, name: &str, value: &[u8]) {
         self.field_name(name);
         writeln!(self.w, "{:X?}", value).unwrap();
+    }
+
+    fn field_hash(&mut self, name: &str, value: &[u8]) {
+        self.field_name(name);
+        for byte in value {
+            write!(self.w, "{:02x}", byte).unwrap();
+        }
+        writeln!(self.w).unwrap();
     }
 
     fn field_string_option<T: fmt::UpperHex>(&mut self, name: &str, value: T, s: Option<&[u8]>) {

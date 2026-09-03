@@ -2,7 +2,7 @@
 //!
 //! This module provides a unified write API for relocatable object files
 //! using [`Object`]. This does not support writing executable files.
-//! This supports the following file formats: COFF, ELF, Mach-O, and XCOFF.
+//! This supports the following file formats: COFF, ELF, Mach-O, XCOFF, and GOFF.
 //!
 //! The submodules define helpers for writing the raw structs. These support
 //! writing both relocatable and executable files. There are writers for
@@ -19,7 +19,7 @@ use hashbrown::HashMap;
 #[cfg(feature = "std")]
 use std::{boxed::Box, collections::HashMap, error, io};
 
-use crate::endian::{Endianness, U32, U64};
+use crate::endian::{Endian, Endianness};
 
 pub use crate::common::*;
 
@@ -32,7 +32,7 @@ pub use coff::CoffExportStyle;
 pub mod elf;
 
 #[cfg(feature = "macho")]
-mod macho;
+pub mod macho;
 #[cfg(feature = "macho")]
 pub use macho::MachOBuildVersion;
 
@@ -42,8 +42,11 @@ pub mod pe;
 #[cfg(feature = "xcoff")]
 mod xcoff;
 
-pub(crate) mod string;
-pub use string::StringId;
+#[cfg(feature = "goff")]
+mod goff;
+
+mod string;
+pub use string::*;
 
 mod util;
 pub use util::*;
@@ -272,6 +275,8 @@ impl<'a> Object<'a> {
             BinaryFormat::MachO => self.macho_section_info(section),
             #[cfg(feature = "xcoff")]
             BinaryFormat::Xcoff => self.xcoff_section_info(section),
+            #[cfg(feature = "goff")]
+            BinaryFormat::Goff => self.goff_section_info(section),
             _ => unimplemented!(),
         }
     }
@@ -524,28 +529,18 @@ impl<'a> Object<'a> {
         self.format != BinaryFormat::Coff
     }
 
-    /// Return true if the file format supports `StandardSection::Common`.
-    #[inline]
-    pub fn has_common(&self) -> bool {
-        self.format == BinaryFormat::MachO
-    }
-
     /// Add a new common symbol and return its `SymbolId`.
     ///
-    /// For Mach-O, this appends the symbol to the `__common` section.
+    /// This sets `symbol.section` to [`SymbolSection::Common`], `symbol.size` to `size`,
+    /// and `symbol.value` to `align`.
     ///
-    /// `align` must be a power of two.
+    /// `align` must be a power of two. It is ignored for COFF, which has no way of
+    /// encoding the alignment of a common symbol.
     pub fn add_common_symbol(&mut self, mut symbol: Symbol, size: u64, align: u64) -> SymbolId {
-        if self.has_common() {
-            let symbol_id = self.add_symbol(symbol);
-            let section = self.section_id(StandardSection::Common);
-            self.add_symbol_bss(symbol_id, section, size, align);
-            symbol_id
-        } else {
-            symbol.section = SymbolSection::Common;
-            symbol.size = size;
-            self.add_symbol(symbol)
-        }
+        symbol.section = SymbolSection::Common;
+        symbol.size = size;
+        symbol.value = align;
+        self.add_symbol(symbol)
     }
 
     /// Add a new file symbol and return its `SymbolId`.
@@ -739,6 +734,8 @@ impl<'a> Object<'a> {
             BinaryFormat::MachO => self.macho_translate_relocation(section, &mut relocation)?,
             #[cfg(feature = "xcoff")]
             BinaryFormat::Xcoff => self.xcoff_translate_relocation(&mut relocation)?,
+            #[cfg(feature = "goff")]
+            BinaryFormat::Goff => self.goff_translate_relocation(&mut relocation)?,
             _ => unimplemented!(),
         }
         let implicit = match self.format {
@@ -750,6 +747,8 @@ impl<'a> Object<'a> {
             BinaryFormat::MachO => self.macho_adjust_addend(&mut relocation)?,
             #[cfg(feature = "xcoff")]
             BinaryFormat::Xcoff => self.xcoff_adjust_addend(&mut relocation)?,
+            #[cfg(feature = "goff")]
+            BinaryFormat::Goff => self.goff_adjust_addend(&mut relocation)?,
             _ => unimplemented!(),
         };
         if implicit && relocation.addend != 0 {
@@ -777,10 +776,16 @@ impl<'a> Object<'a> {
             _ => unimplemented!(),
         };
         let data = self.sections[section.0].data_mut();
-        let offset = relocation.offset as usize;
+        let mut write_bytes = |src: &[u8]| -> Option<()> {
+            let offset = usize::try_from(relocation.offset).ok()?;
+            data.get_mut(offset..)?
+                .get_mut(..src.len())?
+                .copy_from_slice(src);
+            Some(())
+        };
         match size {
-            32 => data.write_at(offset, &U32::new(self.endian, relocation.addend as u32)),
-            64 => data.write_at(offset, &U64::new(self.endian, relocation.addend as u64)),
+            32 => write_bytes(&self.endian.write_u32(relocation.addend as u32)),
+            64 => write_bytes(&self.endian.write_u64(relocation.addend as u64)),
             _ => {
                 return Err(Error(format!(
                     "unimplemented relocation addend {:?}",
@@ -788,7 +793,7 @@ impl<'a> Object<'a> {
                 )));
             }
         }
-        .map_err(|_| {
+        .ok_or_else(|| {
             Error(format!(
                 "invalid relocation offset {}+{} (max {})",
                 relocation.offset,
@@ -820,6 +825,9 @@ impl<'a> Object<'a> {
     }
 
     /// Write the object to a `WritableBuffer`.
+    ///
+    /// The buffer will receive a single [`WritableBuffer::reserve`] call with the exact
+    /// output size before any bytes are written.
     pub fn emit(&self, buffer: &mut dyn WritableBuffer) -> Result<()> {
         match self.format {
             #[cfg(feature = "coff")]
@@ -830,6 +838,8 @@ impl<'a> Object<'a> {
             BinaryFormat::MachO => self.macho_write(buffer),
             #[cfg(feature = "xcoff")]
             BinaryFormat::Xcoff => self.xcoff_write(buffer),
+            #[cfg(feature = "goff")]
+            BinaryFormat::Goff => self.goff_write(buffer),
             _ => unimplemented!(),
         }
     }
@@ -861,8 +871,6 @@ pub enum StandardSection {
     UninitializedTls,
     /// TLS variable structures. Only supported for Mach-O.
     TlsVariables,
-    /// Common data. Only supported for Mach-O.
-    Common,
     /// Notes for GNU properties. Only supported for ELF.
     GnuProperty,
     EhFrame,
@@ -881,7 +889,6 @@ impl StandardSection {
             StandardSection::Tls => SectionKind::Tls,
             StandardSection::UninitializedTls => SectionKind::UninitializedTls,
             StandardSection::TlsVariables => SectionKind::TlsVariables,
-            StandardSection::Common => SectionKind::Common,
             StandardSection::GnuProperty => SectionKind::Note,
             StandardSection::EhFrame => SectionKind::ReadOnlyData,
         }
@@ -899,7 +906,6 @@ impl StandardSection {
             StandardSection::Tls,
             StandardSection::UninitializedTls,
             StandardSection::TlsVariables,
-            StandardSection::Common,
             StandardSection::GnuProperty,
             StandardSection::EhFrame,
         ]
@@ -1059,7 +1065,9 @@ pub struct Symbol {
     pub name: Vec<u8>,
     /// The value of the symbol.
     ///
-    /// If the symbol defined in a section, then this is the section offset of the symbol.
+    /// For [`SymbolSection::Section`], this is the section offset of the symbol.
+    ///
+    /// For [`SymbolSection::Common`], this is its alignment, which must be a power of two.
     pub value: u64,
     /// The size of the symbol.
     pub size: u64,
@@ -1089,8 +1097,6 @@ impl Symbol {
     }
 
     /// Return true if the symbol is common data.
-    ///
-    /// Note: does not check for `SymbolSection::Section` with `SectionKind::Common`.
     #[inline]
     pub fn is_common(&self) -> bool {
         self.section == SymbolSection::Common
@@ -1179,6 +1185,8 @@ pub enum Mangling {
     MachO,
     /// Xcoff symbol mangling.
     Xcoff,
+    /// Goff symbol mangling.
+    Goff,
 }
 
 impl Mangling {
@@ -1190,6 +1198,7 @@ impl Mangling {
             (BinaryFormat::Elf, _) => Mangling::Elf,
             (BinaryFormat::MachO, _) => Mangling::MachO,
             (BinaryFormat::Xcoff, _) => Mangling::Xcoff,
+            (BinaryFormat::Goff, _) => Mangling::Goff,
             _ => Mangling::None,
         }
     }
@@ -1197,7 +1206,9 @@ impl Mangling {
     /// Return the prefix to use for global symbols.
     pub fn global_prefix(self) -> Option<u8> {
         match self {
-            Mangling::None | Mangling::Elf | Mangling::Coff | Mangling::Xcoff => None,
+            Mangling::None | Mangling::Elf | Mangling::Coff | Mangling::Xcoff | Mangling::Goff => {
+                None
+            }
             Mangling::CoffI386 | Mangling::MachO => Some(b'_'),
         }
     }

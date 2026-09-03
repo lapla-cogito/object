@@ -51,6 +51,9 @@
 #[cfg(feature = "cargo-all")]
 compile_error!("'--all-features' is not supported; use '--features all' instead");
 
+#[cfg(all(feature = "goff", not(feature = "unstable")))]
+compile_error!("'goff' is an unstable feature; enable 'unstable' as well");
+
 #[cfg(any(feature = "read_core", feature = "write_core"))]
 #[allow(unused_imports)]
 #[macro_use]
@@ -90,6 +93,8 @@ pub mod build;
 pub mod archive;
 #[cfg(feature = "elf")]
 pub mod elf;
+#[cfg(feature = "goff")]
+pub mod goff;
 #[cfg(feature = "macho")]
 pub mod macho;
 #[cfg(any(feature = "coff", feature = "pe"))]

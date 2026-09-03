@@ -17,7 +17,7 @@ include = [
 features = ['doc']
 
 [dependencies]
-object = { version = "0.39.0", default-features = false, features = ["build", "elf"], path = "../.." }
+object = { version = "0.40.0", default-features = false, features = ["build", "elf"], path = "../.." }
 
 # Dependencies for the cli
 anyhow = { version = "1.0.79", optional = true }
@@ -36,6 +36,9 @@ cli = ["logging", "dep:anyhow", "dep:clap", "dep:env_logger", "dep:memmap2"]
 default = []
 all = ["cli", "logging"]
 doc = []
+
+# Internal feature; matches workspace feature for development purposes.
+unstable-all = ["all"]
 
 [[bin]]
 name = "object-rewrite"
