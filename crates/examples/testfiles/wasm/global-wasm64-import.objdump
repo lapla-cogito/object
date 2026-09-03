@@ -1,5 +1,5 @@
 Format: Wasm Little-endian 64-bit
-Kind: Unknown
+Kind: Executable
 Architecture: Wasm64
 Flags: None
 Relative Address Base: 0

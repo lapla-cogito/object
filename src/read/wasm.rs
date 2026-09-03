@@ -52,6 +52,8 @@ pub struct WasmFile<'data, R = &'data [u8]> {
     relocations: Vec<RelocSection>,
     // Data segments parsed from the `data` section.
     data_segments: Vec<WasmDataSegmentInternal<'data>>,
+    // Whether the file has a `linking` custom section (relocatable object).
+    has_linking: bool,
     // Whether the file has DWARF information.
     has_debug_symbols: bool,
     // Symbols collected from imports, exports, code and name sections.
@@ -121,6 +123,7 @@ impl<'data, R: ReadRef<'data>> WasmFile<'data, R> {
             id_sections: Default::default(),
             relocations: Vec::new(),
             data_segments: Vec::new(),
+            has_linking: false,
             has_debug_symbols: false,
             symbols: Vec::new(),
             entry: 0,
@@ -272,6 +275,7 @@ impl<'data, R: ReadRef<'data>> WasmFile<'data, R> {
                         names = Some(wp::NameSectionReader::new(reader));
                     } else if name == "linking" {
                         // https://github.com/WebAssembly/tool-conventions/blob/main/Linking.md
+                        file.has_linking = true;
                         let reader = wp::BinaryReader::new(section.data(), section.data_offset());
                         let linking = wp::LinkingSectionReader::new(reader)
                             .read_error("Invalid Wasm linking section")?;
@@ -696,14 +700,23 @@ impl<'data, R: ReadRef<'data>> Object<'data> for WasmFile<'data, R> {
     }
 
     fn kind(&self) -> ObjectKind {
-        // TODO: check for `linking` custom section
-        ObjectKind::Unknown
+        if self.has_linking {
+            ObjectKind::Relocatable
+        } else {
+            ObjectKind::Executable
+        }
     }
 
     fn segments(&self) -> Self::SegmentIterator<'_> {
+        // Relocatable objects expose data segments as sections, not segments.
+        let segments = if self.has_linking {
+            &self.data_segments[..0]
+        } else {
+            &self.data_segments[..]
+        };
         WasmSegmentIterator {
             file: self,
-            iter: self.data_segments.iter().enumerate(),
+            iter: segments.iter().enumerate(),
         }
     }
 
@@ -854,7 +867,7 @@ impl<'data, 'file, R> ObjectSegment<'data> for WasmSegment<'data, 'file, R> {
     fn align(&self) -> u64 {
         // `alignment` is encoded as a power of 2.
         if self.segment.has_info {
-            1u64 << self.segment.alignment
+            1u64.checked_shl(self.segment.alignment).unwrap_or(1)
         } else {
             1
         }
@@ -870,24 +883,15 @@ impl<'data, 'file, R> ObjectSegment<'data> for WasmSegment<'data, 'file, R> {
     }
 
     fn data_range(&self, address: u64, size: u64) -> Result<Option<&'data [u8]>> {
-        let segment_address = self.segment.address;
-        let segment_size = self.segment.data.len() as u64;
         if self.segment.is_passive {
             return Ok(None);
         }
-        if address < segment_address {
-            return Ok(None);
-        }
-        let offset = address - segment_address;
-        if offset
-            .checked_add(size)
-            .map_or(true, |end| end > segment_size)
-        {
-            return Ok(None);
-        }
-        let offset = offset as usize;
-        let size = size as usize;
-        Ok(Some(&self.segment.data[offset..offset + size]))
+        Ok(read::util::data_range(
+            self.segment.data,
+            self.segment.address,
+            address,
+            size,
+        ))
     }
 
     #[inline]
@@ -910,9 +914,7 @@ impl<'data, 'file, R> ObjectSegment<'data> for WasmSegment<'data, 'file, R> {
 
     #[inline]
     fn flags(&self) -> SegmentFlags {
-        SegmentFlags::Wasm {
-            flags: self.segment.flags,
-        }
+        SegmentFlags::None
     }
 
     #[inline]
