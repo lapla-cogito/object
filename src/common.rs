@@ -638,6 +638,14 @@ pub enum SectionFlags {
         /// `s_flags` field in the section header.
         s_flags: crate::xcoff::SectionFlags,
     },
+    /// Wasm section flags.
+    #[cfg(feature = "wasm")]
+    Wasm {
+        /// The raw `flags` bits from the `SegmentInfo` subsection of `linking`.
+        ///
+        /// See <https://github.com/WebAssembly/tool-conventions/blob/main/Linking.md>.
+        flags: u32,
+    },
 }
 
 /// Symbol flags that are specific to each file format.

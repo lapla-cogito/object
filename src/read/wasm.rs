@@ -38,6 +38,39 @@ enum SectionId {
 }
 // Update this constant when adding new section id:
 const MAX_SECTION_ID: usize = SectionId::Tag as usize;
+// Section indices for data segments start after the Wasm section id space.
+const DATA_SEGMENT_SECTION_INDEX_BASE: usize = MAX_SECTION_ID + 1;
+
+// `WASM_SEG_FLAG_STRINGS` from the WebAssembly linking convention.
+const WASM_SEG_FLAG_STRINGS: u32 = 0x1;
+// `WASM_SEG_FLAG_TLS` from the WebAssembly linking convention.
+const WASM_SEG_FLAG_TLS: u32 = 0x2;
+
+fn data_segment_section_index(index: usize) -> SectionIndex {
+    SectionIndex(DATA_SEGMENT_SECTION_INDEX_BASE + index)
+}
+
+fn data_segment_align(alignment: u32, has_info: bool) -> u64 {
+    if has_info {
+        1u64.checked_shl(alignment).unwrap_or(1)
+    } else {
+        1
+    }
+}
+
+fn data_segment_kind(name: &str, flags: u32) -> SectionKind {
+    if flags & WASM_SEG_FLAG_TLS != 0 {
+        SectionKind::Tls
+    } else if flags & WASM_SEG_FLAG_STRINGS != 0 {
+        SectionKind::ReadOnlyString
+    } else if name == ".rodata" || name.starts_with(".rodata.") {
+        SectionKind::ReadOnlyData
+    } else if name == ".bss" || name.starts_with(".bss.") {
+        SectionKind::UninitializedData
+    } else {
+        SectionKind::Data
+    }
+}
 
 /// A WebAssembly object file.
 #[derive(Debug)]
@@ -444,6 +477,11 @@ impl<'data, R: ReadRef<'data>> WasmFile<'data, R> {
                         wp::SymbolInfo::Func { .. } => {
                             SymbolSection::Section(SectionIndex(SectionId::Code as usize))
                         }
+                        wp::SymbolInfo::Data {
+                            symbol: Some(data), ..
+                        } => {
+                            SymbolSection::Section(data_segment_section_index(data.index as usize))
+                        }
                         _ => {
                             // TODO: anything that is defined should have a known section.
                             // Additionally, address and size should be within this section.
@@ -481,8 +519,7 @@ impl<'data, R: ReadRef<'data>> WasmFile<'data, R> {
                     }
                     wp::SymbolInfo::Data { name, symbol, .. } => {
                         if let Some(symbol) = symbol {
-                            // TODO: this is an offset within a data segment.
-                            // This may need to be changed to be an offset within the data section.
+                            // Offset and size within the data segment, which is exposed as a section.
                             address = symbol.offset.into();
                             size = symbol.size.into();
                         }
@@ -729,6 +766,22 @@ impl<'data, R: ReadRef<'data>> Object<'data> for WasmFile<'data, R> {
     }
 
     fn section_by_index(&self, index: SectionIndex) -> Result<WasmSection<'data, '_, R>> {
+        if let Some(seg_index) = index.0.checked_sub(DATA_SEGMENT_SECTION_INDEX_BASE) {
+            if self.has_linking {
+                let segment = self
+                    .data_segments
+                    .get(seg_index)
+                    .read_error("Invalid Wasm section index")?;
+                return Ok(WasmSection {
+                    file: self,
+                    inner: WasmSectionInner::DataSegment {
+                        index: seg_index,
+                        segment,
+                    },
+                });
+            }
+            return Err(Error("Invalid Wasm section index"));
+        }
         // TODO: Missing sections should return an empty section.
         let id_section = self
             .id_sections
@@ -738,7 +791,7 @@ impl<'data, R: ReadRef<'data>> Object<'data> for WasmFile<'data, R> {
         let section = self.sections.get(id_section).unwrap();
         Ok(WasmSection {
             file: self,
-            section,
+            inner: WasmSectionInner::Header(section),
         })
     }
 
@@ -746,6 +799,7 @@ impl<'data, R: ReadRef<'data>> Object<'data> for WasmFile<'data, R> {
         WasmSectionIterator {
             file: self,
             sections: self.sections.iter(),
+            data_segments: self.data_segments.iter().enumerate(),
         }
     }
 
@@ -865,12 +919,7 @@ impl<'data, 'file, R> ObjectSegment<'data> for WasmSegment<'data, 'file, R> {
 
     #[inline]
     fn align(&self) -> u64 {
-        // `alignment` is encoded as a power of 2.
-        if self.segment.has_info {
-            1u64.checked_shl(self.segment.alignment).unwrap_or(1)
-        } else {
-            1
-        }
+        data_segment_align(self.segment.alignment, self.segment.has_info)
     }
 
     #[inline]
@@ -928,17 +977,30 @@ impl<'data, 'file, R> ObjectSegment<'data> for WasmSegment<'data, 'file, R> {
 pub struct WasmSectionIterator<'data, 'file, R = &'data [u8]> {
     file: &'file WasmFile<'data, R>,
     sections: slice::Iter<'file, SectionHeader<'data>>,
+    data_segments: core::iter::Enumerate<slice::Iter<'file, WasmDataSegmentInternal<'data>>>,
 }
 
 impl<'data, 'file, R> Iterator for WasmSectionIterator<'data, 'file, R> {
     type Item = WasmSection<'data, 'file, R>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let section = self.sections.next()?;
-        Some(WasmSection {
-            file: self.file,
-            section,
-        })
+        for section in self.sections.by_ref() {
+            if self.file.has_linking && section.id == SectionId::Data {
+                continue;
+            }
+            return Some(WasmSection {
+                file: self.file,
+                inner: WasmSectionInner::Header(section),
+            });
+        }
+        if self.file.has_linking {
+            let (index, segment) = self.data_segments.next()?;
+            return Some(WasmSection {
+                file: self.file,
+                inner: WasmSectionInner::DataSegment { index, segment },
+            });
+        }
+        None
     }
 }
 
@@ -948,7 +1010,16 @@ impl<'data, 'file, R> Iterator for WasmSectionIterator<'data, 'file, R> {
 #[derive(Debug)]
 pub struct WasmSection<'data, 'file, R = &'data [u8]> {
     file: &'file WasmFile<'data, R>,
-    section: &'file SectionHeader<'data>,
+    inner: WasmSectionInner<'data, 'file>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum WasmSectionInner<'data, 'file> {
+    Header(&'file SectionHeader<'data>),
+    DataSegment {
+        index: usize,
+        segment: &'file WasmDataSegmentInternal<'data>,
+    },
 }
 
 impl<'data, 'file, R> read::private::Sealed for WasmSection<'data, 'file, R> {}
@@ -958,9 +1029,12 @@ impl<'data, 'file, R: ReadRef<'data>> ObjectSection<'data> for WasmSection<'data
 
     #[inline]
     fn index(&self) -> SectionIndex {
-        // Note that we treat all custom sections as index 0.
-        // This is ok because they are never looked up by index.
-        SectionIndex(self.section.id as usize)
+        match self.inner {
+            // Note that we treat all custom sections as index 0.
+            // This is ok because they are never looked up by index.
+            WasmSectionInner::Header(section) => SectionIndex(section.id as usize),
+            WasmSectionInner::DataSegment { index, .. } => data_segment_section_index(index),
+        }
     }
 
     #[inline]
@@ -970,32 +1044,56 @@ impl<'data, 'file, R: ReadRef<'data>> ObjectSection<'data> for WasmSection<'data
 
     #[inline]
     fn size(&self) -> u64 {
-        let range = &self.section.range;
-        (range.end - range.start) as u64
+        match self.inner {
+            WasmSectionInner::Header(section) => (section.range.end - section.range.start) as u64,
+            WasmSectionInner::DataSegment { segment, .. } => segment.data.len() as u64,
+        }
     }
 
     #[inline]
     fn align(&self) -> u64 {
-        1
+        match self.inner {
+            WasmSectionInner::Header(_) => 1,
+            WasmSectionInner::DataSegment { segment, .. } => {
+                data_segment_align(segment.alignment, segment.has_info)
+            }
+        }
     }
 
     #[inline]
     fn file_range(&self) -> Option<(u64, u64)> {
-        let range = &self.section.range;
-        Some((range.start as _, range.end as _))
+        match self.inner {
+            WasmSectionInner::Header(section) => {
+                Some((section.range.start as _, section.range.end as _))
+            }
+            WasmSectionInner::DataSegment { segment, .. } => {
+                Some((segment.file_offset, segment.data.len() as u64))
+            }
+        }
     }
 
     #[inline]
     fn data(&self) -> Result<&'data [u8]> {
-        let range = &self.section.range;
-        self.file
-            .data
-            .read_bytes_at(range.start as u64, range.end as u64 - range.start as u64)
-            .read_error("Invalid Wasm section size or offset")
+        match self.inner {
+            WasmSectionInner::Header(section) => self
+                .file
+                .data
+                .read_bytes_at(
+                    section.range.start as u64,
+                    section.range.end as u64 - section.range.start as u64,
+                )
+                .read_error("Invalid Wasm section size or offset"),
+            WasmSectionInner::DataSegment { segment, .. } => Ok(segment.data),
+        }
     }
 
-    fn data_range(&self, _address: u64, _size: u64) -> Result<Option<&'data [u8]>> {
-        unimplemented!()
+    fn data_range(&self, address: u64, size: u64) -> Result<Option<&'data [u8]>> {
+        match self.inner {
+            WasmSectionInner::Header(_) => Ok(None),
+            WasmSectionInner::DataSegment { segment, .. } => {
+                Ok(read::util::data_range(segment.data, 0, address, size))
+            }
+        }
     }
 
     #[inline]
@@ -1015,21 +1113,24 @@ impl<'data, 'file, R: ReadRef<'data>> ObjectSection<'data> for WasmSection<'data
 
     #[inline]
     fn name(&self) -> Result<&'data str> {
-        Ok(match self.section.id {
-            SectionId::Custom => self.section.name,
-            SectionId::Type => "<type>",
-            SectionId::Import => "<import>",
-            SectionId::Function => "<function>",
-            SectionId::Table => "<table>",
-            SectionId::Memory => "<memory>",
-            SectionId::Global => "<global>",
-            SectionId::Export => "<export>",
-            SectionId::Start => "<start>",
-            SectionId::Element => "<element>",
-            SectionId::Code => "<code>",
-            SectionId::Data => "<data>",
-            SectionId::DataCount => "<data_count>",
-            SectionId::Tag => "<tag>",
+        Ok(match self.inner {
+            WasmSectionInner::Header(section) => match section.id {
+                SectionId::Custom => section.name,
+                SectionId::Type => "<type>",
+                SectionId::Import => "<import>",
+                SectionId::Function => "<function>",
+                SectionId::Table => "<table>",
+                SectionId::Memory => "<memory>",
+                SectionId::Global => "<global>",
+                SectionId::Export => "<export>",
+                SectionId::Start => "<start>",
+                SectionId::Element => "<element>",
+                SectionId::Code => "<code>",
+                SectionId::Data => "<data>",
+                SectionId::DataCount => "<data_count>",
+                SectionId::Tag => "<tag>",
+            },
+            WasmSectionInner::DataSegment { segment, .. } => segment.name,
         })
     }
 
@@ -1045,32 +1146,42 @@ impl<'data, 'file, R: ReadRef<'data>> ObjectSection<'data> for WasmSection<'data
 
     #[inline]
     fn kind(&self) -> SectionKind {
-        match self.section.id {
-            SectionId::Custom => match self.section.name {
-                "linking" => SectionKind::Linker,
-                name if name.starts_with("reloc.") => SectionKind::Linker,
-                _ => SectionKind::Other,
+        match self.inner {
+            WasmSectionInner::Header(section) => match section.id {
+                SectionId::Custom => match section.name {
+                    "linking" => SectionKind::Linker,
+                    name if name.starts_with("reloc.") => SectionKind::Linker,
+                    _ => SectionKind::Other,
+                },
+                SectionId::Type => SectionKind::Metadata,
+                SectionId::Import => SectionKind::Linker,
+                SectionId::Function => SectionKind::Metadata,
+                SectionId::Table => SectionKind::UninitializedData,
+                SectionId::Memory => SectionKind::UninitializedData,
+                SectionId::Global => SectionKind::Data,
+                SectionId::Export => SectionKind::Linker,
+                SectionId::Start => SectionKind::Linker,
+                SectionId::Element => SectionKind::Data,
+                SectionId::Code => SectionKind::Text,
+                SectionId::Data => SectionKind::Data,
+                SectionId::DataCount => SectionKind::UninitializedData,
+                SectionId::Tag => SectionKind::Data,
             },
-            SectionId::Type => SectionKind::Metadata,
-            SectionId::Import => SectionKind::Linker,
-            SectionId::Function => SectionKind::Metadata,
-            SectionId::Table => SectionKind::UninitializedData,
-            SectionId::Memory => SectionKind::UninitializedData,
-            SectionId::Global => SectionKind::Data,
-            SectionId::Export => SectionKind::Linker,
-            SectionId::Start => SectionKind::Linker,
-            SectionId::Element => SectionKind::Data,
-            SectionId::Code => SectionKind::Text,
-            SectionId::Data => SectionKind::Data,
-            SectionId::DataCount => SectionKind::UninitializedData,
-            SectionId::Tag => SectionKind::Data,
+            WasmSectionInner::DataSegment { segment, .. } => {
+                data_segment_kind(segment.name, segment.flags)
+            }
         }
     }
 
     #[inline]
     fn relocations(&self) -> WasmRelocationIterator<'data, 'file, R> {
+        let target = match self.inner {
+            WasmSectionInner::Header(section) => section.binary_index,
+            // Data-segment content relocations are not remapped yet.
+            WasmSectionInner::DataSegment { .. } => u32::MAX,
+        };
         WasmRelocationIterator {
-            target: self.section.binary_index,
+            target,
             sections: self.file.relocations.iter(),
             entries: [].iter(),
             marker: PhantomData,
@@ -1083,7 +1194,14 @@ impl<'data, 'file, R: ReadRef<'data>> ObjectSection<'data> for WasmSection<'data
 
     #[inline]
     fn flags(&self) -> SectionFlags {
-        SectionFlags::None
+        match self.inner {
+            WasmSectionInner::DataSegment { segment, .. } if segment.has_info => {
+                SectionFlags::Wasm {
+                    flags: segment.flags,
+                }
+            }
+            _ => SectionFlags::None,
+        }
     }
 }
 
