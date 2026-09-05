@@ -652,10 +652,8 @@ pub enum SectionFlags {
     /// Wasm section flags.
     #[cfg(feature = "wasm")]
     Wasm {
-        /// The raw `flags` bits from the `SegmentInfo` subsection of `linking`.
-        ///
-        /// See <https://github.com/WebAssembly/tool-conventions/blob/main/Linking.md>.
-        flags: u32,
+        /// Flags from the `SegmentInfo` subsection of `linking`.
+        flags: crate::wasm::SegmentFlags,
     },
     /// GOFF section flags.
     #[cfg(feature = "goff")]
